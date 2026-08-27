@@ -74,12 +74,19 @@ export class CompletionMemoryCache {
         }
     }
 }
+const COMPLETION_BOUNDARY = /\.{3,}|…+|[，,。.]/u;
+function firstCompletionFragment(text) {
+    const boundary = COMPLETION_BOUNDARY.exec(text);
+    if (boundary === null || boundary.index === undefined)
+        return text;
+    return text.slice(0, boundary.index + boundary[0].length);
+}
 function project(baseDraft, completion, draft) {
     if (!draft.startsWith(baseDraft))
         return { kind: 'diverged' };
     const typed = draft.slice(baseDraft.length);
     if (completion.startsWith(typed)) {
-        const text = completion.slice(typed.length);
+        const text = firstCompletionFragment(completion.slice(typed.length));
         return text === '' ? { kind: 'waiting' } : { kind: 'visible', text };
     }
     if (typed.startsWith(completion))

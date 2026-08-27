@@ -1634,7 +1634,7 @@ window.__ModuleLoader__.load({
             })));
           }
         }
-
+        
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -1642,7 +1642,7 @@ window.__ModuleLoader__.load({
         } else {
           newResult[${k}] = ${id}.value;
         }
-
+        
       `);
 					else if (!isOptionalIn) doc.write(`
         const ${id}_present = ${k} in input;
@@ -1677,7 +1677,7 @@ window.__ModuleLoader__.load({
             path: iss.path ? [${k}, ...iss.path] : [${k}]
           })));
         }
-
+        
         if (${id}.value === undefined) {
           if (${k} in input) {
             newResult[${k}] = undefined;
@@ -1685,7 +1685,7 @@ window.__ModuleLoader__.load({
         } else {
           newResult[${k}] = ${id}.value;
         }
-
+        
       `);
 				}
 				doc.write(`payload.value = newResult;`);
@@ -4118,7 +4118,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 				},
 				sourceLocation: {
 					"file": "packages/composer-completion/src/index.ts",
-					"line": 151,
+					"line": 165,
 					"column": 3
 				}
 			}, {
@@ -4135,7 +4135,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 				},
 				sourceLocation: {
 					"file": "packages/composer-completion/src/index.ts",
-					"line": 135,
+					"line": 149,
 					"column": 3
 				}
 			}]
@@ -4203,11 +4203,17 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 				for (let index = this.entries.length - 1; index >= 0; index -= 1) if ((this.entries[index]?.expiresAt ?? 0) <= now) this.entries.splice(index, 1);
 			}
 		};
+		const COMPLETION_BOUNDARY = /\.{3,}|…+|[，,。.]/u;
+		function firstCompletionFragment(text) {
+			const boundary = COMPLETION_BOUNDARY.exec(text);
+			if (boundary === null || boundary.index === void 0) return text;
+			return text.slice(0, boundary.index + boundary[0].length);
+		}
 		function project(baseDraft, completion, draft) {
 			if (!draft.startsWith(baseDraft)) return { kind: "diverged" };
 			const typed = draft.slice(baseDraft.length);
 			if (completion.startsWith(typed)) {
-				const text = completion.slice(typed.length);
+				const text = firstCompletionFragment(completion.slice(typed.length));
 				return text === "" ? { kind: "waiting" } : {
 					kind: "visible",
 					text
