@@ -91,10 +91,12 @@ function throwForFinish(reason, signal) {
 export class CompletionGenerator {
     ctx;
     sessionController;
+    recentUserMessages;
     config;
-    constructor(ctx, sessionController, config) {
+    constructor(ctx, sessionController, recentUserMessages, config) {
         this.ctx = ctx;
         this.sessionController = sessionController;
+        this.recentUserMessages = recentUserMessages;
         this.config = config;
     }
     /** Stream full replacement-suffix snapshots for the addressed draft. */
@@ -102,11 +104,13 @@ export class CompletionGenerator {
         if (!this.config.enabled)
             return;
         signal.throwIfAborted();
+        const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(this.config.requestTimeoutMs)]);
         const resolved = await this.sessionController.resolveAgent(request.sessionId);
         if ('error' in resolved)
             throw new TypertRemoteFailure(resolved.error);
         const { agent } = resolved;
-        const prompt = buildCompletionPrompt(agent.session, request.draft, this.config.maxInputBytes, this.config.maxDraftBytes);
+        const references = await this.recentUserMessages.select(agent.session, requestSignal);
+        const prompt = buildCompletionPrompt(agent.session, request.draft, references.messages, this.config.maxInputBytes, this.config.maxDraftBytes);
         if (prompt === undefined)
             return;
         const context = {
@@ -118,7 +122,6 @@ export class CompletionGenerator {
                 content: [{ type: 'text', text: prompt.text }],
                 source: { kind: 'plugin', plugin: '@kermanx/dsh-composer-completion' },
             })];
-        const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(this.config.requestTimeoutMs)]);
         const options = {
             provider: this.config.provider,
             model: this.config.model,
@@ -132,6 +135,7 @@ export class CompletionGenerator {
         };
         const decoder = new CompletionProtocolDecoder();
         let visible = '';
+        this.recentUserMessages.markSent(references.signature);
         for await (const chunk of this.ctx.llm.stream(options)) {
             if (requestSignal.aborted)
                 return;

@@ -18,6 +18,7 @@ import {
   STOP_SEQUENCES,
   SYSTEM_PROMPT,
 } from './prompt.ts'
+import type { RecentUserMessageStore } from './recent-user-messages.ts'
 import type {
   CompletionContext,
   CompletionFrame,
@@ -114,6 +115,7 @@ export class CompletionGenerator {
   constructor(
     private readonly ctx: Context,
     private readonly sessionController: SessionController,
+    private readonly recentUserMessages: RecentUserMessageStore,
     private readonly config: ResolvedConfig,
   ) {}
 
@@ -121,12 +123,18 @@ export class CompletionGenerator {
   async *complete(request: CompletionRequest, signal: AbortSignal): AsyncIterable<CompletionFrame> {
     if (!this.config.enabled) return
     signal.throwIfAborted()
+    const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(this.config.requestTimeoutMs)])
     const resolved = await this.sessionController.resolveAgent(request.sessionId as SessionId)
     if ('error' in resolved) throw new TypertRemoteFailure(resolved.error)
     const { agent } = resolved
+    const references = await this.recentUserMessages.select(
+      agent.session,
+      requestSignal,
+    )
     const prompt = buildCompletionPrompt(
       agent.session,
       request.draft,
+      references.messages,
       this.config.maxInputBytes,
       this.config.maxDraftBytes,
     )
@@ -141,7 +149,6 @@ export class CompletionGenerator {
       content: [{ type: 'text', text: prompt.text }],
       source: { kind: 'plugin', plugin: '@kermanx/dsh-composer-completion' },
     })]
-    const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(this.config.requestTimeoutMs)])
     const options: GenerateOptions = {
       provider: this.config.provider,
       model: this.config.model,
@@ -156,6 +163,7 @@ export class CompletionGenerator {
 
     const decoder = new CompletionProtocolDecoder()
     let visible = ''
+    this.recentUserMessages.markSent(references.signature)
     for await (const chunk of this.ctx.llm.stream(options)) {
       if (requestSignal.aborted) return
       if (completionAnchor(agent.session) !== prompt.anchorMessageId) return

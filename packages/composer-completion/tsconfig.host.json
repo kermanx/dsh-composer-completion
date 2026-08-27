@@ -10,6 +10,7 @@
     "src/index.ts",
     "src/completion.ts",
     "src/prompt.ts",
+    "src/recent-user-messages.ts",
     "src/types.ts"
   ]
 }

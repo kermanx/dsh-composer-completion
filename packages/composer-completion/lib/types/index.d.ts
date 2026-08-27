@@ -50,6 +50,7 @@ export declare class ComposerCompletionService extends TypertRemoteService {
     static Config: z<Config>;
     private readonly resolved;
     private readonly generator;
+    private readonly recentUserMessages;
     constructor(ctx: Context, config: Config);
     /** Return the browser policy paired with this Host generation policy. */
     policy(): CompletionClientPolicy;

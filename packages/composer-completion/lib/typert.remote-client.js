@@ -62,7 +62,7 @@ export const TYPERT_REMOTE = {
         typeSymbol: '@kermanx/dsh-composer-completion/types#CompletionFrame',
         schema: _kermanx_dsh_composer_completion_composerCompletion_complete_result$schema,
       },
-      sourceLocation: {"file":"packages/composer-completion/src/index.ts","line":151,"column":3},
+      sourceLocation: {"file":"packages/composer-completion/src/index.ts","line":165,"column":3},
     },
     {
       id: '@kermanx/dsh-composer-completion#composerCompletion/policy',
@@ -77,7 +77,7 @@ export const TYPERT_REMOTE = {
         typeSymbol: '@kermanx/dsh-composer-completion/types#CompletionClientPolicy',
         schema: _kermanx_dsh_composer_completion_composerCompletion_policy_result$schema,
       },
-      sourceLocation: {"file":"packages/composer-completion/src/index.ts","line":135,"column":3},
+      sourceLocation: {"file":"packages/composer-completion/src/index.ts","line":149,"column":3},
     },
   ],
 }

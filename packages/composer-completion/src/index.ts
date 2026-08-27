@@ -7,6 +7,7 @@ import type {} from '@deepseek-ai/dsh-api-session-controller'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { CompletionGenerator } from './completion.ts'
 import { PROMPT_VERSION, promptFramingBytes } from './prompt.ts'
+import { RecentUserMessageStore } from './recent-user-messages.ts'
 import type {
   CompletionClientPolicy,
   CompletionFrame,
@@ -123,11 +124,24 @@ export class ComposerCompletionService extends TypertRemoteService {
 
   private readonly resolved: ResolvedConfig
   private readonly generator: CompletionGenerator
+  private readonly recentUserMessages: RecentUserMessageStore
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'composerCompletion', { namespace: 'composerCompletion' })
     this.resolved = resolveConfig(config)
-    this.generator = new CompletionGenerator(ctx, ctx.sessionController, this.resolved)
+    this.recentUserMessages = new RecentUserMessageStore()
+    this.generator = new CompletionGenerator(
+      ctx,
+      ctx.sessionController,
+      this.recentUserMessages,
+      this.resolved,
+    )
+    ctx.effect(() => async () => {
+      await this.recentUserMessages.flush()
+    }, 'composer-completion.recent-user-messages')
+    ctx.on('session/event', (session, event) => {
+      if (event.type === 'turn/end') this.recentUserMessages.recordCompletedTurn(session, event)
+    })
   }
 
   /** Return the browser policy paired with this Host generation policy. */
