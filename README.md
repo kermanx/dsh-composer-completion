@@ -4,8 +4,6 @@
 
 `dsh-composer-completion` 是一个独立的 DeepSeek Harness 插件，为 Web 主输入框提供类似代码补全的灰字续写。插件使用独立的 Flash 模型生成建议；按 `Tab` 接受，按 `Esc` 忽略。
 
-![](./assets/screenshot.png)
-
 ## 功能
 
 - 在用户停顿后显示灰字补全，当前输入为空时也可以建议下一段输入
