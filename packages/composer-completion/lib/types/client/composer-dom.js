@@ -14,7 +14,6 @@ export function probeComposer(anchor) {
         card,
         input,
         grow,
-        placeholder: grow.querySelector('[data-composer-placeholder]'),
     };
 }
 /** Whether the live browser selection is collapsed at the end of this editor. */

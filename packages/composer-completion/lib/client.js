@@ -4435,8 +4435,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 			return {
 				card,
 				input,
-				grow,
-				placeholder: grow.querySelector("[data-composer-placeholder]")
+				grow
 			};
 		}
 		/** Whether the live browser selection is collapsed at the end of this editor. */
@@ -4597,14 +4596,15 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 			]);
 			const emptyGhost = dom !== void 0 && input?.draft === "" ? snapshot.suggestion : null;
 			(0, react.useEffect)(() => {
-				const placeholder = dom?.placeholder;
-				if (placeholder === null || placeholder === void 0 || emptyGhost === null) return;
+				if (dom === void 0 || emptyGhost === null) return;
+				const placeholder = dom.grow.querySelector("[data-composer-placeholder]");
+				if (placeholder === null) return;
 				const previous = placeholder.style.visibility;
 				placeholder.style.visibility = "hidden";
 				return () => {
 					placeholder.style.visibility = previous;
 				};
-			}, [dom?.placeholder, emptyGhost]);
+			}, [dom, emptyGhost]);
 			(0, react.useEffect)(() => {
 				const editor = dom?.input;
 				if (editor === void 0) return;

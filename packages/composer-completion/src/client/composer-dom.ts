@@ -4,7 +4,6 @@ export interface ComposerDom {
   readonly card: HTMLElement
   readonly input: HTMLElement
   readonly grow: HTMLElement
-  readonly placeholder: HTMLElement | null
 }
 
 /** Resolve only the public composer markers below this overlay occurrence. */
@@ -19,7 +18,6 @@ export function probeComposer(anchor: HTMLElement): ComposerDom | undefined {
     card,
     input,
     grow,
-    placeholder: grow.querySelector<HTMLElement>('[data-composer-placeholder]'),
   }
 }
 

@@ -3,7 +3,6 @@ export interface ComposerDom {
     readonly card: HTMLElement;
     readonly input: HTMLElement;
     readonly grow: HTMLElement;
-    readonly placeholder: HTMLElement | null;
 }
 /** Resolve only the public composer markers below this overlay occurrence. */
 export declare function probeComposer(anchor: HTMLElement): ComposerDom | undefined;

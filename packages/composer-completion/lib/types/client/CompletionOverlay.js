@@ -104,13 +104,15 @@ function ActiveCompletionOverlay({ remote, policy, cache, useInput, inputActions
     }, [dom, input, snapshot.suggestion]);
     const emptyGhost = dom !== undefined && input?.draft === '' ? snapshot.suggestion : null;
     useEffect(() => {
-        const placeholder = dom?.placeholder;
-        if (placeholder === null || placeholder === undefined || emptyGhost === null)
+        if (dom === undefined || emptyGhost === null)
+            return;
+        const placeholder = dom.grow.querySelector('[data-composer-placeholder]');
+        if (placeholder === null)
             return;
         const previous = placeholder.style.visibility;
         placeholder.style.visibility = 'hidden';
         return () => { placeholder.style.visibility = previous; };
-    }, [dom?.placeholder, emptyGhost]);
+    }, [dom, emptyGhost]);
     useEffect(() => {
         const editor = dom?.input;
         if (editor === undefined)

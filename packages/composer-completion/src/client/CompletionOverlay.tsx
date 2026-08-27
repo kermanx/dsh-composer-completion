@@ -153,12 +153,13 @@ function ActiveCompletionOverlay({
 
   const emptyGhost = dom !== undefined && input?.draft === '' ? snapshot.suggestion : null
   useEffect(() => {
-    const placeholder = dom?.placeholder
-    if (placeholder === null || placeholder === undefined || emptyGhost === null) return
+    if (dom === undefined || emptyGhost === null) return
+    const placeholder = dom.grow.querySelector<HTMLElement>('[data-composer-placeholder]')
+    if (placeholder === null) return
     const previous = placeholder.style.visibility
     placeholder.style.visibility = 'hidden'
     return () => { placeholder.style.visibility = previous }
-  }, [dom?.placeholder, emptyGhost])
+  }, [dom, emptyGhost])
 
   useEffect(() => {
     const editor = dom?.input
