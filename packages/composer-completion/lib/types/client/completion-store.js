@@ -249,8 +249,7 @@ export class CompletionStore {
                     done = true;
             }
         }
-        catch (error) {
-            console.warn('[composer-completion] request failed', error);
+        catch {
             if (!abort.signal.aborted)
                 this.publish(null);
             return;

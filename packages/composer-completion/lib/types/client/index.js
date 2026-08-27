@@ -3,11 +3,9 @@ import { createElement } from 'react';
 import completionRemote from '@kermanx/dsh-composer-completion/remote';
 import { CompletionMemoryCache } from "./completion-store.js";
 import { CompletionOverlay, } from "./CompletionOverlay.js";
-export const inject = ['remote', 'slots'];
-/** Mount the package-local Remote contribution and ghost-text slot occupant. */
-export async function apply(ctx) {
+export const inject = ['remote'];
+function registerUi(ctx) {
     const remote = ctx.remote;
-    const disposeRemote = await remote.$mount(completionRemote);
     let resources;
     const loadResources = () => {
         resources ??= (async () => {
@@ -21,15 +19,14 @@ export async function apply(ctx) {
                     cache: new CompletionMemoryCache(result.value.cacheEntries, result.value.cacheTtlMs),
                 };
             }
-            catch (error) {
+            catch {
                 // A missing Host half disables the optional UI without poisoning the composer.
-                console.warn('[composer-completion] Host Remote unavailable', error);
                 return undefined;
             }
         })();
         return resources;
     };
-    const disposeSlot = ctx.slots.inject('conversation.input.overlay', () => ctx.slots.register({
+    ctx.slots.inject('conversation.input.overlay', () => ctx.slots.register({
         name: 'conversation.input.overlay',
         id: 'composer-completion',
         order: 100,
@@ -37,8 +34,21 @@ export async function apply(ctx) {
         ...props,
         loadResources,
     })));
+}
+/** Mount the package-local Remote contribution before starting its namespace consumer. */
+export async function apply(ctx) {
+    const disposeRemote = await ctx.remote.$mount(completionRemote);
+    const ui = ctx.inject(['remote.composerCompletion', 'slots'], registerUi);
+    try {
+        await ui;
+    }
+    catch (error) {
+        await ui.dispose();
+        await disposeRemote();
+        throw error;
+    }
     return async () => {
-        disposeSlot();
+        await ui.dispose();
         await disposeRemote();
     };
 }
