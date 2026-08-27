@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "tsBuildInfoFile": "lib/tsconfig.host.tsbuildinfo",
+    "types": ["node"]
+  },
+  "files": [
+    "src/index.ts",
+    "src/completion.ts",
+    "src/prompt.ts",
+    "src/types.ts"
+  ]
+}

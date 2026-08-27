@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "tsBuildInfoFile": "lib/tsconfig.client.tsbuildinfo",
+    "jsx": "react-jsx",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": []
+  },
+  "files": [
+    "src/client/index.ts",
+    "src/client/CompletionOverlay.tsx",
+    "src/client/completion-store.ts",
+    "src/client/composer-dom.ts",
+    "src/types.ts"
+  ]
+}

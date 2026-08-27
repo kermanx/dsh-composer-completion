@@ -1,0 +1,3 @@
+- insert:
+    - id: composer-completion
+      name: '@kermanx/dsh-composer-completion'
