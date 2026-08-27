@@ -5,10 +5,12 @@ import { Buffer } from "node:buffer";
 //#region lib/types/prompt.js
 /** Cache-friendly prompt assembly for user-authored request continuation. */
 /** Changed whenever model-visible task framing or output protocol changes. */
-const PROMPT_VERSION = "composer-completion-v2";
-const SYSTEM_PROMPT = `You are the user in the conversation below. Passages labeled You are your own previous messages. You are now typing CURRENT INPUT to the Assistant.
+const PROMPT_VERSION = "composer-completion-v3";
+const SYSTEM_PROMPT = `You are the user writing the current request to the Assistant. The text you complete is a direction, question, correction, or constraint that tells the Assistant what you want it to handle. It is not a social reply, a recap of the Assistant's answer, or text written in the Assistant's voice.
 
-Continue your own text at <CURSOR>. Do not predict what may happen next in the conversation or describe what a user might say. Write only the words you are already trying to enter.
+Passages labeled You are your own previous requests. You are now continuing CURRENT INPUT at <CURSOR>.
+
+Continue only the request you are already trying to enter. Do not predict the next turn of the conversation or compose a plausible reaction to the Assistant.
 
 Your intent is defined only by CURRENT INPUT and intent explicitly established in your previous You messages. Assistant messages may provide established facts, names, and terminology, but they do not create a new intent for you. Do not invent a new goal, problem, preference, decision, requirement, or fact.
 
