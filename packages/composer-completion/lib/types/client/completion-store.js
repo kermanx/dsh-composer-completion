@@ -74,7 +74,7 @@ export class CompletionMemoryCache {
         }
     }
 }
-const COMPLETION_BOUNDARY = /\.{3,}|…+|[，,。.]/u;
+const COMPLETION_BOUNDARY = /\.{3,}|…+|[？?，,。.]/u;
 function firstCompletionFragment(text) {
     const boundary = COMPLETION_BOUNDARY.exec(text);
     if (boundary === null || boundary.index === undefined)

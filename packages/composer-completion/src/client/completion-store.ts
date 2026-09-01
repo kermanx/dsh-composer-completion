@@ -136,7 +136,7 @@ type Projection =
   | { readonly kind: 'waiting' }
   | { readonly kind: 'diverged' }
 
-const COMPLETION_BOUNDARY = /\.{3,}|…+|[，,。.]/u
+const COMPLETION_BOUNDARY = /\.{3,}|…+|[？?，,。.]/u
 
 function firstCompletionFragment(text: string): string {
   const boundary = COMPLETION_BOUNDARY.exec(text)

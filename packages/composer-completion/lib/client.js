@@ -4203,7 +4203,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 				for (let index = this.entries.length - 1; index >= 0; index -= 1) if ((this.entries[index]?.expiresAt ?? 0) <= now) this.entries.splice(index, 1);
 			}
 		};
-		const COMPLETION_BOUNDARY = /\.{3,}|…+|[，,。.]/u;
+		const COMPLETION_BOUNDARY = /\.{3,}|…+|[？?，,。.]/u;
 		function firstCompletionFragment(text) {
 			const boundary = COMPLETION_BOUNDARY.exec(text);
 			if (boundary === null || boundary.index === void 0) return text;
