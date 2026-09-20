@@ -52,6 +52,28 @@ dsh plugin --profile web add "$PWD/packages/composer-completion"
     debounceMs: 250
 ```
 
+全部可配置项（默认值与取值来自 `packages/composer-completion/src/index.ts` 的 `DEFAULTS` 与 `Config`）：
+
+| 配置项 | 默认值 | 取值 | 说明 |
+| --- | --- | --- | --- |
+| `enabled` | `true` | 布尔 | 关掉后不再注册补全 |
+| `provider` | `deepseek-official` | 字符串 | 生成补全所用的 Provider |
+| `model` | `deepseek-v4-flash` | 字符串 | 生成补全所用的模型 |
+| `reasoningEffort` | `off` | 字符串 | 推理强度；默认关闭以压低首字延迟 |
+| `temperature` | `0.01` | `0`–`2` | 采样温度，默认接近确定性输出 |
+| `maxInputBytes` | `65536` | 整数 `≥ 1` | 单次请求的提示词字节上限 |
+| `maxDraftBytes` | `16384` | 整数 `≥ 1` | 当前草稿可占用的字节上限 |
+| `maxOutputTokens` | `64` | 整数 `≥ 1` | 单次补全的输出 token 上限 |
+| `requestTimeoutMs` | `10000` | 整数 `≥ 1` | 单次补全请求超时 |
+| `debounceMs` | `250` | `0`–`60000` | 停止输入后等待多久再发起请求 |
+| `minPrefixCharacters` | `0` | 整数 `≥ 0` | 触发补全所需的最少前缀字符数 |
+| `maxOutputCharacters` | `512` | 整数 `≥ 1` | 补全文本的字符上限 |
+| `cacheEntries` | `128` | 整数 `≥ 1` | 补全结果缓存的条目数 |
+| `cacheTtlMs` | `300000` | 整数 `≥ 1` | 缓存条目的存活时间 |
+
+> ⚠️ `maxInputBytes` 必须大于 `maxDraftBytes` 加上提示词框架占用的字节数，否则插件在启动时直接报错：
+> `composer-completion: maxInputBytes must exceed maxDraftBytes plus prompt framing`。两个值一起调大时才需要留意。
+
 修改配置后需要重启 `dsh web`。
 
 ## 开发
