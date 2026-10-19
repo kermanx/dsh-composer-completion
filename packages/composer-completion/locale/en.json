@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Composer Completion",
+    "description": "Inline composer completions with fragment acceptance, request logs, and replay."
+  }
+}

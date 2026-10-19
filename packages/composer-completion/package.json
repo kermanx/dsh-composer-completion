@@ -1,7 +1,7 @@
 {
   "name": "@kermanx/dsh-composer-completion",
   "description": "Independent Host and Web composer ghost-text completion plugin for DeepSeek Harness",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -31,7 +31,8 @@
       "default": "./lib/typert.remote-client.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "scripts/request-log.mjs",
@@ -44,7 +45,8 @@
     "lib/typert.host.d.ts",
     "lib/typert.remote-client.js",
     "lib/typert.remote-client.d.ts",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "locale"
   ],
   "bin": {
     "composer-completion-log": "./scripts/request-log.mjs"
@@ -160,5 +162,15 @@
     "react-dom": "^18.2.0",
     "tsdown": "^0.22.2",
     "typescript": "^5.9.2"
+  },
+  "author": "kermanx",
+  "homepage": "https://github.com/kermanx/dsh-composer-completion#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kermanx/dsh-composer-completion.git",
+    "directory": "packages/composer-completion"
+  },
+  "engines": {
+    "dsh": "0.2.1-rc.2"
   }
 }
