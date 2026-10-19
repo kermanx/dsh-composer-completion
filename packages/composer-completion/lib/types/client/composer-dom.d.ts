@@ -1,4 +1,5 @@
 /** Fail-closed DOM integration with the resident conversation composer. */
+import type { InputActions } from '@deepseek-ai/dsh-client-ui-conversation/client';
 export interface ComposerDom {
     readonly card: HTMLElement;
     readonly input: HTMLElement;
@@ -8,6 +9,6 @@ export interface ComposerDom {
 export declare function probeComposer(anchor: HTMLElement): ComposerDom | undefined;
 /** Whether the live browser selection is collapsed at the end of this editor. */
 export declare function caretAtEnd(input: HTMLElement): boolean;
-/** Insert one accepted suffix through the editor's paste path, with standard fallbacks. */
-export declare function insertCompletion(input: HTMLElement, suffix: string, wholeDraft: string, setDraft: (text: string) => void): boolean;
+/** Insert one accepted suffix through the editor's revision-guarded public action. */
+export declare function insertCompletion(input: HTMLElement, suffix: string, actions: Pick<InputActions, 'captureInsertion' | 'insertText'>): boolean;
 //# sourceMappingURL=composer-dom.d.ts.map

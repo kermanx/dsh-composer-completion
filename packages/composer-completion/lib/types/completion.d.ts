@@ -4,6 +4,13 @@ import type { SessionController } from '@deepseek-ai/dsh-api-session-controller'
 import type { RecentUserMessageStore } from './recent-user-messages.ts';
 import type { CompletionFrame, CompletionRequest } from './types.ts';
 import type { ResolvedConfig } from './index.ts';
+declare module '@deepseek-ai/dsh-llm' {
+    interface MessageSourceMap {
+        'composer-completion': {
+            readonly kind: 'composer-completion';
+        };
+    }
+}
 /** Cancellable completion generator independent from the main Agent loop. */
 export declare class CompletionGenerator {
     private readonly ctx;

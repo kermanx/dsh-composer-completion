@@ -2,32 +2,21 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { createElement } from 'react'
-import type { ClientRemote } from '@deepseek-ai/dsh-api-gateway/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import completionRemote from '@kermanx/dsh-composer-completion/remote'
-import type { CompletionClientPolicy } from '../types.ts'
-import { CompletionMemoryCache, type CompletionRemote } from './completion-store.ts'
+import { CompletionMemoryCache } from './completion-store.ts'
 import {
   CompletionOverlay,
   type LoadedCompletionResources,
 } from './CompletionOverlay.tsx'
 
-type ComposerCompletionRemote = ClientRemote & {
-  readonly composerCompletion: CompletionRemote & {
-    policy(): Promise<
-      | { readonly ok: true; readonly value: CompletionClientPolicy }
-      | { readonly ok: false; readonly error: unknown }
-    >
-  }
-}
-
 export const inject = ['remote']
 
 function registerUi(ctx: Context): void {
-  const remote = ctx.remote as ComposerCompletionRemote
+  const remote = ctx.remote
   let resources: Promise<LoadedCompletionResources | undefined> | undefined
   const loadResources = (): Promise<LoadedCompletionResources | undefined> => {
     resources ??= (async () => {

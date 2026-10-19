@@ -2,11 +2,12 @@
 
 import { readFileSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname } from 'node:path'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { ProjectionDefinition, SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { z } from 'zod'
+import { completionStoragePath } from './storage.ts'
 
 const FILE_VERSION = 1
 const REFERENCE_COUNT = 30
@@ -34,6 +35,27 @@ const persistedStateSchema = z.object({
 type StoredMessage = z.infer<typeof storedMessageSchema>
 type PersistedState = z.infer<typeof persistedStateSchema>
 
+const referenceStateSchema = z.object({
+  sessionId: z.string(),
+  userMessageIds: z.array(z.string()),
+  pending: z.object({
+    turn: z.number().int(),
+    messages: z.array(storedMessageSchema),
+  }).nullable(),
+  completed: z.object({
+    seq: z.number().int().nonnegative(),
+    messages: z.array(storedMessageSchema),
+  }).nullable(),
+})
+
+type ReferenceState = z.infer<typeof referenceStateSchema>
+
+declare module '@deepseek-ai/dsh-session-projection' {
+  interface SessionProjectionStateMap {
+    composerCompletionReferences: ReferenceState
+  }
+}
+
 /** One stable reference request selected for the next model prompt. */
 export interface ReferenceUserMessage {
   readonly key: string
@@ -44,20 +66,6 @@ export interface ReferenceUserMessage {
 export interface ReferenceSelection {
   readonly messages: readonly ReferenceUserMessage[]
   readonly signature: string
-}
-
-function expandHome(path: string): string {
-  if (path === '~') return homedir()
-  if (path.startsWith('~/') || path.startsWith('~\\')) return join(homedir(), path.slice(2))
-  return path
-}
-
-function stateFilePath(): string {
-  const configured = process.env.DSH_HOME
-  const root = configured === undefined || configured.trim() === ''
-    ? join(homedir(), '.dsh')
-    : resolve(expandHome(configured))
-  return join(root, 'composer-completion', 'recent-user-messages.json')
 }
 
 function messageText(message: Message): string {
@@ -84,14 +92,41 @@ function storedMessage(
   }
 }
 
-function currentMessageIds(session: Session): Set<string> {
-  const ids = new Set<string>()
-  for (const event of session.events) {
-    if (event.type === 'user/message' && event.data.source.kind === 'user') {
-      ids.add(String(event.data.id))
+/** Restore and incrementally maintain the reference data needed from each Session. */
+export const referenceProjection: ProjectionDefinition<'composerCompletionReferences'> = {
+  key: 'composerCompletionReferences',
+  stateVersion: 1,
+  stateSchema: referenceStateSchema,
+  init: header => ({ sessionId: String(header.id), userMessageIds: [], pending: null, completed: null }),
+  apply: (state, event) => {
+    switch (event.type) {
+      case 'turn/start':
+        return { ...state, pending: { turn: event.data.turn, messages: [] }, completed: null }
+      case 'user/message': {
+        if (event.data.source.kind !== 'user') return state
+        const message = storedMessage(state.sessionId, event)
+        return {
+          ...state,
+          userMessageIds: [...state.userMessageIds, String(event.data.id)],
+          pending: state.pending === null || message === undefined ? state.pending : {
+            ...state.pending,
+            messages: [...state.pending.messages, message],
+          },
+        }
+      }
+      case 'turn/end':
+        if (state.pending?.turn !== event.data.turn) return state
+        return {
+          ...state,
+          pending: null,
+          completed: event.data.reason.kind === 'completed'
+            ? { seq: event.seq, messages: state.pending.messages }
+            : null,
+        }
+      default:
+        return state
     }
-  }
-  return ids
+  },
 }
 
 function selectionSignature(messages: readonly StoredMessage[]): string {
@@ -107,7 +142,10 @@ export class RecentUserMessageStore {
   private writeFailure: unknown
   private lastSentSignature: string | undefined
 
-  constructor(filePath = stateFilePath()) {
+  constructor(
+    private readonly projections: SessionProjectionRegistry,
+    filePath = completionStoragePath('recent-user-messages.json'),
+  ) {
     this.filePath = filePath
     this.state = this.readState()
   }
@@ -118,19 +156,9 @@ export class RecentUserMessageStore {
     turnEnd: Extract<SessionEvent, { type: 'turn/end' }>,
   ): void {
     if (turnEnd.data.reason.kind !== 'completed') return
-    const start = session.events.findLast(event => (
-      event.seq < turnEnd.seq
-      && event.type === 'turn/start'
-      && event.data.turn === turnEnd.data.turn
-    ))
-    if (start === undefined) return
-    const messages: StoredMessage[] = []
-    for (const event of session.events) {
-      if (event.seq <= start.seq || event.seq >= turnEnd.seq || event.type !== 'user/message') continue
-      const message = storedMessage(String(session.id), event)
-      if (message !== undefined) messages.push(message)
-    }
-    if (this.addMessages(messages, true)) this.scheduleWrite()
+    const { completed } = this.referenceState(session)
+    if (completed?.seq !== turnEnd.seq) return
+    if (this.addMessages(completed.messages, true)) this.scheduleWrite()
   }
 
   /** Select a frozen reference prefix, rotating only when a cache miss is expected. */
@@ -140,7 +168,7 @@ export class RecentUserMessageStore {
   ): Promise<ReferenceSelection> {
     await this.flush()
     signal.throwIfAborted()
-    const currentIds = currentMessageIds(session)
+    const currentIds = new Set(this.referenceState(session).userMessageIds)
     const selected = this.selectedMessages(String(session.id), currentIds)
     const currentSignature = selectionSignature(selected)
     const cacheExpected = this.lastSentSignature !== undefined
@@ -165,6 +193,12 @@ export class RecentUserMessageStore {
   async flush(): Promise<void> {
     await this.writes
     if (this.writeFailure !== undefined) throw this.writeFailure
+  }
+
+  private referenceState(session: Session): ReferenceState {
+    const state = this.projections.stateOf(session, 'composerCompletionReferences')
+    if (state === undefined) throw new Error('composer-completion: reference projection is not registered')
+    return state
   }
 
   private readState(): PersistedState {

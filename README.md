@@ -17,7 +17,7 @@
 
 ### 前置条件
 
-- 已配置可用模型 Provider 的 DeepSeek Harness
+- 已配置可用模型 Provider 的 DeepSeek Harness `0.2.1-rc.2`
 
 ### 步骤
 
@@ -56,7 +56,7 @@ dsh plugin --profile web add "$PWD/packages/composer-completion"
 
 ## 开发
 
-仓库提交了可直接安装的构建产物。只有修改源码时才需要在同一上级目录准备名为 `deepseek-harness-4` 的 DeepSeek Harness checkout：
+仓库提交了可直接安装的构建产物。开发依赖固定为匹配的 dsh 发布版本，无需另外准备 DeepSeek Harness checkout：
 
 ```sh
 pnpm install

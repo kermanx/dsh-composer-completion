@@ -1,6 +1,6 @@
 /** Host-side completion generation and output-protocol decoding. */
 import { createUserMessage, ReasoningEffortId, } from '@deepseek-ai/dsh-llm';
-import { TypertRemoteFailure } from '@deepseek-ai/dsh-typert-protocol';
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol';
 import { buildCompletionPrompt, completionAnchor, PROMPT_VERSION, STOP_SEQUENCES, SYSTEM_PROMPT, } from "./prompt.js";
 class CompletionProtocolDecoder {
     static OPEN = '<COMPLETION>';
@@ -70,21 +70,13 @@ function throwForFinish(reason, signal) {
         case 'aborted':
             if (signal.aborted)
                 return;
-            throw new TypertRemoteFailure({ code: 'internal', message: reason.failure.message, details: {} });
+            throw new RemoteError('gateway/internal', reason.failure.message, {});
         case 'error':
-            throw new TypertRemoteFailure({ code: 'internal', message: reason.failure.message, details: {} });
+            throw new RemoteError('gateway/internal', reason.failure.message, {});
         case 'tool-calls':
-            throw new TypertRemoteFailure({
-                code: 'internal',
-                message: 'Composer completion unexpectedly requested a tool',
-                details: {},
-            });
+            throw new RemoteError('gateway/internal', 'Composer completion unexpectedly requested a tool', {});
         default:
-            throw new TypertRemoteFailure({
-                code: 'internal',
-                message: `Unsupported composer-completion finish reason "${String(reason.kind)}"`,
-                details: {},
-            });
+            throw new RemoteError('gateway/internal', `Unsupported composer-completion finish reason "${String(reason.kind)}"`, {});
     }
 }
 /** Cancellable completion generator independent from the main Agent loop. */
@@ -107,7 +99,7 @@ export class CompletionGenerator {
         const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(this.config.requestTimeoutMs)]);
         const resolved = await this.sessionController.resolveAgent(request.sessionId);
         if ('error' in resolved)
-            throw new TypertRemoteFailure(resolved.error);
+            throw resolved.error;
         const { agent } = resolved;
         const references = await this.recentUserMessages.select(agent.session, requestSignal);
         const prompt = buildCompletionPrompt(agent.session, request.draft, references.messages, this.config.maxInputBytes, this.config.maxDraftBytes);
@@ -120,7 +112,7 @@ export class CompletionGenerator {
         };
         const messages = [createUserMessage({
                 content: [{ type: 'text', text: prompt.text }],
-                source: { kind: 'plugin', plugin: '@kermanx/dsh-composer-completion' },
+                source: { kind: 'composer-completion' },
             })];
         const options = {
             provider: this.config.provider,

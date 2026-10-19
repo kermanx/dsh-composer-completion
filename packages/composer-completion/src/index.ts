@@ -7,7 +7,7 @@ import type {} from '@deepseek-ai/dsh-api-session-controller'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { CompletionGenerator } from './completion.ts'
 import { PROMPT_VERSION, promptFramingBytes } from './prompt.ts'
-import { RecentUserMessageStore } from './recent-user-messages.ts'
+import { RecentUserMessageStore, referenceProjection } from './recent-user-messages.ts'
 import type {
   CompletionClientPolicy,
   CompletionFrame,
@@ -119,7 +119,7 @@ function resolveConfig(config: Config): ResolvedConfig {
 
 /** Host service backing the generated `remote.composerCompletion` namespace. */
 export class ComposerCompletionService extends TypertRemoteService {
-  static inject = ['llm', 'sessionController', 'typert']
+  static inject = ['llm', 'sessionController', 'sessionProjections', 'typert']
   static Config = Config
 
   private readonly resolved: ResolvedConfig
@@ -129,7 +129,8 @@ export class ComposerCompletionService extends TypertRemoteService {
   constructor(ctx: Context, config: Config) {
     super(ctx, 'composerCompletion', { namespace: 'composerCompletion' })
     this.resolved = resolveConfig(config)
-    this.recentUserMessages = new RecentUserMessageStore()
+    ctx.sessionProjections.register(referenceProjection)
+    this.recentUserMessages = new RecentUserMessageStore(ctx.sessionProjections)
     this.generator = new CompletionGenerator(
       ctx,
       ctx.sessionController,

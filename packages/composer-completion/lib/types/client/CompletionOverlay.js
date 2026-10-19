@@ -6,7 +6,7 @@ import { CompletionStore, } from "./completion-store.js";
 import { caretAtEnd, insertCompletion, probeComposer, } from "./composer-dom.js";
 const EMPTY_GHOST_STYLE = {
     position: 'absolute',
-    inset: '4px 12px auto 16px',
+    inset: '4px 8px auto 14px',
     color: 'var(--dsw-alias-label-caption)',
     whiteSpace: 'pre-wrap',
     pointerEvents: 'none',
@@ -17,7 +17,7 @@ const EMPTY_GHOST_STYLE = {
 function isEligible(dom, input, running, composing) {
     if (dom === undefined || running || composing)
         return false;
-    if (input.phase !== 'plain' || input.imageIds.length !== 0 || input.occurrences.length !== 0)
+    if (input.phase !== 'plain' || input.attachmentIds.length !== 0 || input.occurrences.length !== 0)
         return false;
     if (dom.input.getAttribute('contenteditable') !== 'true' || document.activeElement !== dom.input)
         return false;
@@ -133,12 +133,12 @@ function ActiveCompletionOverlay({ remote, policy, cache, useInput, inputActions
                 || !isEligible(dom, input, running, composingRef.current))
                 return;
             event.preventDefault();
-            if (insertCompletion(editor, suffix, input.draft, inputActions.setDraft))
+            if (insertCompletion(editor, suffix, inputActions))
                 store.accepted();
         };
         document.addEventListener('keydown', keydown);
         return () => { document.removeEventListener('keydown', keydown); };
-    }, [dom, input, inputActions.setDraft, running, store]);
+    }, [dom, input, inputActions, running, store]);
     return (_jsxs(_Fragment, { children: [_jsx("span", { ref: anchorRef, "aria-hidden": true, style: { display: 'none' } }), emptyGhost === null || dom === undefined ? null : createPortal(_jsx("div", { "aria-hidden": true, "data-composer-empty-completion": true, style: EMPTY_GHOST_STYLE, children: emptyGhost }), dom.grow)] }));
 }
 //# sourceMappingURL=CompletionOverlay.js.map

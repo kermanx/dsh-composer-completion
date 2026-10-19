@@ -1,5 +1,7 @@
 /** Fail-closed DOM integration with the resident conversation composer. */
 
+import type { InputActions } from '@deepseek-ai/dsh-client-ui-conversation/client'
+
 export interface ComposerDom {
   readonly card: HTMLElement
   readonly input: HTMLElement
@@ -36,33 +38,12 @@ export function caretAtEnd(input: HTMLElement): boolean {
   }
 }
 
-/** Insert one accepted suffix through the editor's paste path, with standard fallbacks. */
+/** Insert one accepted suffix through the editor's revision-guarded public action. */
 export function insertCompletion(
   input: HTMLElement,
   suffix: string,
-  wholeDraft: string,
-  setDraft: (text: string) => void,
+  actions: Pick<InputActions, 'captureInsertion' | 'insertText'>,
 ): boolean {
   if (suffix === '' || document.activeElement !== input || !caretAtEnd(input)) return false
-  try {
-    const clipboard = new DataTransfer()
-    clipboard.setData('text/plain', suffix)
-    const event = new ClipboardEvent('paste', {
-      bubbles: true,
-      cancelable: true,
-      clipboardData: clipboard,
-    })
-    input.dispatchEvent(event)
-    if (event.defaultPrevented) return true
-  } catch {
-    // ClipboardEvent construction is unavailable in some embedded WebViews; use the browser edit command below.
-  }
-
-  try {
-    if (document.execCommand('insertText', false, suffix)) return true
-  } catch {
-    // A disabled editing command falls through to the public whole-draft action.
-  }
-  setDraft(wholeDraft + suffix)
-  return true
+  return actions.insertText(suffix, actions.captureInsertion())
 }

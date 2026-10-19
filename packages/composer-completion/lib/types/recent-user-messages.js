@@ -1,9 +1,9 @@
 /** Cross-Session user-request references for composer completion. */
 import { readFileSync } from 'node:fs';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname } from 'node:path';
 import { z } from 'zod';
+import { completionStoragePath } from "./storage.js";
 const FILE_VERSION = 1;
 const REFERENCE_COUNT = 30;
 const MAX_MESSAGE_CODE_POINTS = 100;
@@ -21,20 +21,18 @@ const persistedStateSchema = z.object({
     selectedKeys: z.array(z.string().min(1)).max(REFERENCE_COUNT),
     newMessagesSinceRotation: z.number().int().nonnegative(),
 }).strict();
-function expandHome(path) {
-    if (path === '~')
-        return homedir();
-    if (path.startsWith('~/') || path.startsWith('~\\'))
-        return join(homedir(), path.slice(2));
-    return path;
-}
-function stateFilePath() {
-    const configured = process.env.DSH_HOME;
-    const root = configured === undefined || configured.trim() === ''
-        ? join(homedir(), '.dsh')
-        : resolve(expandHome(configured));
-    return join(root, 'composer-completion', 'recent-user-messages.json');
-}
+const referenceStateSchema = z.object({
+    sessionId: z.string(),
+    userMessageIds: z.array(z.string()),
+    pending: z.object({
+        turn: z.number().int(),
+        messages: z.array(storedMessageSchema),
+    }).nullable(),
+    completed: z.object({
+        seq: z.number().int().nonnegative(),
+        messages: z.array(storedMessageSchema),
+    }).nullable(),
+});
 function messageText(message) {
     return message.content
         .filter((block) => block.type === 'text')
@@ -56,26 +54,57 @@ function storedMessage(sessionId, event) {
         sentAt: event.time,
     };
 }
-function currentMessageIds(session) {
-    const ids = new Set();
-    for (const event of session.events) {
-        if (event.type === 'user/message' && event.data.source.kind === 'user') {
-            ids.add(String(event.data.id));
+/** Restore and incrementally maintain the reference data needed from each Session. */
+export const referenceProjection = {
+    key: 'composerCompletionReferences',
+    stateVersion: 1,
+    stateSchema: referenceStateSchema,
+    init: header => ({ sessionId: String(header.id), userMessageIds: [], pending: null, completed: null }),
+    apply: (state, event) => {
+        switch (event.type) {
+            case 'turn/start':
+                return { ...state, pending: { turn: event.data.turn, messages: [] }, completed: null };
+            case 'user/message': {
+                if (event.data.source.kind !== 'user')
+                    return state;
+                const message = storedMessage(state.sessionId, event);
+                return {
+                    ...state,
+                    userMessageIds: [...state.userMessageIds, String(event.data.id)],
+                    pending: state.pending === null || message === undefined ? state.pending : {
+                        ...state.pending,
+                        messages: [...state.pending.messages, message],
+                    },
+                };
+            }
+            case 'turn/end':
+                if (state.pending?.turn !== event.data.turn)
+                    return state;
+                return {
+                    ...state,
+                    pending: null,
+                    completed: event.data.reason.kind === 'completed'
+                        ? { seq: event.seq, messages: state.pending.messages }
+                        : null,
+                };
+            default:
+                return state;
         }
-    }
-    return ids;
-}
+    },
+};
 function selectionSignature(messages) {
     return messages.map(message => message.key).join('\n');
 }
 /** Persist, select, and cache-stabilize cross-Session user requests. */
 export class RecentUserMessageStore {
+    projections;
     filePath;
     state;
     writes = Promise.resolve();
     writeFailure;
     lastSentSignature;
-    constructor(filePath = stateFilePath()) {
+    constructor(projections, filePath = completionStoragePath('recent-user-messages.json')) {
+        this.projections = projections;
         this.filePath = filePath;
         this.state = this.readState();
     }
@@ -83,27 +112,17 @@ export class RecentUserMessageStore {
     recordCompletedTurn(session, turnEnd) {
         if (turnEnd.data.reason.kind !== 'completed')
             return;
-        const start = session.events.findLast(event => (event.seq < turnEnd.seq
-            && event.type === 'turn/start'
-            && event.data.turn === turnEnd.data.turn));
-        if (start === undefined)
+        const { completed } = this.referenceState(session);
+        if (completed?.seq !== turnEnd.seq)
             return;
-        const messages = [];
-        for (const event of session.events) {
-            if (event.seq <= start.seq || event.seq >= turnEnd.seq || event.type !== 'user/message')
-                continue;
-            const message = storedMessage(String(session.id), event);
-            if (message !== undefined)
-                messages.push(message);
-        }
-        if (this.addMessages(messages, true))
+        if (this.addMessages(completed.messages, true))
             this.scheduleWrite();
     }
     /** Select a frozen reference prefix, rotating only when a cache miss is expected. */
     async select(session, signal) {
         await this.flush();
         signal.throwIfAborted();
-        const currentIds = currentMessageIds(session);
+        const currentIds = new Set(this.referenceState(session).userMessageIds);
         const selected = this.selectedMessages(String(session.id), currentIds);
         const currentSignature = selectionSignature(selected);
         const cacheExpected = this.lastSentSignature !== undefined
@@ -127,6 +146,12 @@ export class RecentUserMessageStore {
         await this.writes;
         if (this.writeFailure !== undefined)
             throw this.writeFailure;
+    }
+    referenceState(session) {
+        const state = this.projections.stateOf(session, 'composerCompletionReferences');
+        if (state === undefined)
+            throw new Error('composer-completion: reference projection is not registered');
+        return state;
     }
     readState() {
         try {

@@ -42,7 +42,7 @@ type ActiveCompletionOverlayProps = PropsRuntime<'conversation.input.overlay'> &
 
 const EMPTY_GHOST_STYLE: CSSProperties = {
   position: 'absolute',
-  inset: '4px 12px auto 16px',
+  inset: '4px 8px auto 14px',
   color: 'var(--dsw-alias-label-caption)',
   whiteSpace: 'pre-wrap',
   pointerEvents: 'none',
@@ -58,7 +58,7 @@ function isEligible(
   composing: boolean,
 ): boolean {
   if (dom === undefined || running || composing) return false
-  if (input.phase !== 'plain' || input.imageIds.length !== 0 || input.occurrences.length !== 0) return false
+  if (input.phase !== 'plain' || input.attachmentIds.length !== 0 || input.occurrences.length !== 0) return false
   if (dom.input.getAttribute('contenteditable') !== 'true' || document.activeElement !== dom.input) return false
   if (dom.card.querySelector('[role="listbox"]') !== null) return false
   return caretAtEnd(dom.input)
@@ -176,11 +176,11 @@ function ActiveCompletionOverlay({
       if (suffix === null || suffix === ''
         || !isEligible(dom, input, running, composingRef.current)) return
       event.preventDefault()
-      if (insertCompletion(editor, suffix, input.draft, inputActions.setDraft)) store.accepted()
+      if (insertCompletion(editor, suffix, inputActions)) store.accepted()
     }
     document.addEventListener('keydown', keydown)
     return () => { document.removeEventListener('keydown', keydown) }
-  }, [dom, input, inputActions.setDraft, running, store])
+  }, [dom, input, inputActions, running, store])
 
   return (
     <>

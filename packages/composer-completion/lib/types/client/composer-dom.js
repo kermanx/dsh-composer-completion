@@ -33,33 +33,10 @@ export function caretAtEnd(input) {
         return false;
     }
 }
-/** Insert one accepted suffix through the editor's paste path, with standard fallbacks. */
-export function insertCompletion(input, suffix, wholeDraft, setDraft) {
+/** Insert one accepted suffix through the editor's revision-guarded public action. */
+export function insertCompletion(input, suffix, actions) {
     if (suffix === '' || document.activeElement !== input || !caretAtEnd(input))
         return false;
-    try {
-        const clipboard = new DataTransfer();
-        clipboard.setData('text/plain', suffix);
-        const event = new ClipboardEvent('paste', {
-            bubbles: true,
-            cancelable: true,
-            clipboardData: clipboard,
-        });
-        input.dispatchEvent(event);
-        if (event.defaultPrevented)
-            return true;
-    }
-    catch {
-        // ClipboardEvent construction is unavailable in some embedded WebViews; use the browser edit command below.
-    }
-    try {
-        if (document.execCommand('insertText', false, suffix))
-            return true;
-    }
-    catch {
-        // A disabled editing command falls through to the public whole-draft action.
-    }
-    setDraft(wholeDraft + suffix);
-    return true;
+    return actions.insertText(suffix, actions.captureInsertion());
 }
 //# sourceMappingURL=composer-dom.js.map

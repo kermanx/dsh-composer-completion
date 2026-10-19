@@ -37,7 +37,7 @@ import z from '@deepseek-ai/schemastery';
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
 import { CompletionGenerator } from "./completion.js";
 import { PROMPT_VERSION, promptFramingBytes } from "./prompt.js";
-import { RecentUserMessageStore } from "./recent-user-messages.js";
+import { RecentUserMessageStore, referenceProjection } from "./recent-user-messages.js";
 const DEFAULTS = {
     enabled: true,
     provider: 'deepseek-official',
@@ -108,7 +108,7 @@ let ComposerCompletionService = (() => {
             __esDecorate(this, null, _complete_decorators, { kind: "method", name: "complete", static: false, private: false, access: { has: obj => "complete" in obj, get: obj => obj.complete }, metadata: _metadata }, null, _instanceExtraInitializers);
             if (_metadata) Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
         }
-        static inject = ['llm', 'sessionController', 'typert'];
+        static inject = ['llm', 'sessionController', 'sessionProjections', 'typert'];
         static Config = Config;
         resolved = __runInitializers(this, _instanceExtraInitializers);
         generator;
@@ -116,7 +116,8 @@ let ComposerCompletionService = (() => {
         constructor(ctx, config) {
             super(ctx, 'composerCompletion', { namespace: 'composerCompletion' });
             this.resolved = resolveConfig(config);
-            this.recentUserMessages = new RecentUserMessageStore();
+            ctx.sessionProjections.register(referenceProjection);
+            this.recentUserMessages = new RecentUserMessageStore(ctx.sessionProjections);
             this.generator = new CompletionGenerator(ctx, ctx.sessionController, this.recentUserMessages, this.resolved);
             ctx.effect(() => async () => {
                 await this.recentUserMessages.flush();

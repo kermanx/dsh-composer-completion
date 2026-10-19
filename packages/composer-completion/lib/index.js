@@ -1,12 +1,12 @@
 import z from "@deepseek-ai/schemastery";
-import { Remote, TypertRemoteFailure, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
+import { Remote, RemoteError, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import { ReasoningEffortId, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { z as z$1 } from "zod";
+import { homedir } from "node:os";
 //#region lib/types/prompt.js
 /** Cache-friendly prompt assembly for user-authored request continuation. */
 /** Changed whenever model-visible task framing or output protocol changes. */
@@ -212,26 +212,10 @@ function throwForFinish(reason, signal) {
 		case "max-tokens": return;
 		case "aborted":
 			if (signal.aborted) return;
-			throw new TypertRemoteFailure({
-				code: "internal",
-				message: reason.failure.message,
-				details: {}
-			});
-		case "error": throw new TypertRemoteFailure({
-			code: "internal",
-			message: reason.failure.message,
-			details: {}
-		});
-		case "tool-calls": throw new TypertRemoteFailure({
-			code: "internal",
-			message: "Composer completion unexpectedly requested a tool",
-			details: {}
-		});
-		default: throw new TypertRemoteFailure({
-			code: "internal",
-			message: `Unsupported composer-completion finish reason "${String(reason.kind)}"`,
-			details: {}
-		});
+			throw new RemoteError("gateway/internal", reason.failure.message, {});
+		case "error": throw new RemoteError("gateway/internal", reason.failure.message, {});
+		case "tool-calls": throw new RemoteError("gateway/internal", "Composer completion unexpectedly requested a tool", {});
+		default: throw new RemoteError("gateway/internal", `Unsupported composer-completion finish reason "${String(reason.kind)}"`, {});
 	}
 }
 /** Cancellable completion generator independent from the main Agent loop. */
@@ -252,7 +236,7 @@ var CompletionGenerator = class {
 		signal.throwIfAborted();
 		const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(this.config.requestTimeoutMs)]);
 		const resolved = await this.sessionController.resolveAgent(request.sessionId);
-		if ("error" in resolved) throw new TypertRemoteFailure(resolved.error);
+		if ("error" in resolved) throw resolved.error;
 		const { agent } = resolved;
 		const references = await this.recentUserMessages.select(agent.session, requestSignal);
 		const prompt = buildCompletionPrompt(agent.session, request.draft, references.messages, this.config.maxInputBytes, this.config.maxDraftBytes);
@@ -267,10 +251,7 @@ var CompletionGenerator = class {
 				type: "text",
 				text: prompt.text
 			}],
-			source: {
-				kind: "plugin",
-				plugin: "@kermanx/dsh-composer-completion"
-			}
+			source: { kind: "composer-completion" }
 		})];
 		const options = {
 			provider: this.config.provider,
@@ -313,6 +294,17 @@ var CompletionGenerator = class {
 	}
 };
 //#endregion
+//#region lib/types/storage.js
+/** Shared on-disk namespace for completion state and experiments. */
+/** Resolve DSH_HOME with the same home-directory expansion as the reference store. */
+function completionStoragePath(...parts) {
+	const configured = process.env.DSH_HOME;
+	let root = configured === void 0 || configured.trim() === "" ? join(homedir(), ".dsh") : configured;
+	if (root === "~") root = homedir();
+	else if (root.startsWith("~/") || root.startsWith("~\\")) root = join(homedir(), root.slice(2));
+	return join(resolve(root), "composer-completion", ...parts);
+}
+//#endregion
 //#region lib/types/recent-user-messages.js
 /** Cross-Session user-request references for composer completion. */
 const FILE_VERSION = 1;
@@ -332,16 +324,18 @@ const persistedStateSchema = z$1.object({
 	selectedKeys: z$1.array(z$1.string().min(1)).max(REFERENCE_COUNT),
 	newMessagesSinceRotation: z$1.number().int().nonnegative()
 }).strict();
-function expandHome(path) {
-	if (path === "~") return homedir();
-	if (path.startsWith("~/") || path.startsWith("~\\")) return join(homedir(), path.slice(2));
-	return path;
-}
-function stateFilePath() {
-	const configured = process.env.DSH_HOME;
-	const root = configured === void 0 || configured.trim() === "" ? join(homedir(), ".dsh") : resolve(expandHome(configured));
-	return join(root, "composer-completion", "recent-user-messages.json");
-}
+const referenceStateSchema = z$1.object({
+	sessionId: z$1.string(),
+	userMessageIds: z$1.array(z$1.string()),
+	pending: z$1.object({
+		turn: z$1.number().int(),
+		messages: z$1.array(storedMessageSchema)
+	}).nullable(),
+	completed: z$1.object({
+		seq: z$1.number().int().nonnegative(),
+		messages: z$1.array(storedMessageSchema)
+	}).nullable()
+});
 function messageText(message) {
 	return message.content.filter((block) => block.type === "text").map((block) => block.text).join("");
 }
@@ -358,43 +352,81 @@ function storedMessage(sessionId, event) {
 		sentAt: event.time
 	};
 }
-function currentMessageIds(session) {
-	const ids = /* @__PURE__ */ new Set();
-	for (const event of session.events) if (event.type === "user/message" && event.data.source.kind === "user") ids.add(String(event.data.id));
-	return ids;
-}
+/** Restore and incrementally maintain the reference data needed from each Session. */
+const referenceProjection = {
+	key: "composerCompletionReferences",
+	stateVersion: 1,
+	stateSchema: referenceStateSchema,
+	init: (header) => ({
+		sessionId: String(header.id),
+		userMessageIds: [],
+		pending: null,
+		completed: null
+	}),
+	apply: (state, event) => {
+		switch (event.type) {
+			case "turn/start": return {
+				...state,
+				pending: {
+					turn: event.data.turn,
+					messages: []
+				},
+				completed: null
+			};
+			case "user/message": {
+				if (event.data.source.kind !== "user") return state;
+				const message = storedMessage(state.sessionId, event);
+				return {
+					...state,
+					userMessageIds: [...state.userMessageIds, String(event.data.id)],
+					pending: state.pending === null || message === void 0 ? state.pending : {
+						...state.pending,
+						messages: [...state.pending.messages, message]
+					}
+				};
+			}
+			case "turn/end":
+				if (state.pending?.turn !== event.data.turn) return state;
+				return {
+					...state,
+					pending: null,
+					completed: event.data.reason.kind === "completed" ? {
+						seq: event.seq,
+						messages: state.pending.messages
+					} : null
+				};
+			default: return state;
+		}
+	}
+};
 function selectionSignature(messages) {
 	return messages.map((message) => message.key).join("\n");
 }
 /** Persist, select, and cache-stabilize cross-Session user requests. */
 var RecentUserMessageStore = class {
+	projections;
 	filePath;
 	state;
 	writes = Promise.resolve();
 	writeFailure;
 	lastSentSignature;
-	constructor(filePath = stateFilePath()) {
+	constructor(projections, filePath = completionStoragePath("recent-user-messages.json")) {
+		this.projections = projections;
 		this.filePath = filePath;
 		this.state = this.readState();
 	}
 	/** Record qualifying human messages only after their turn completes normally. */
 	recordCompletedTurn(session, turnEnd) {
 		if (turnEnd.data.reason.kind !== "completed") return;
-		const start = session.events.findLast((event) => event.seq < turnEnd.seq && event.type === "turn/start" && event.data.turn === turnEnd.data.turn);
-		if (start === void 0) return;
-		const messages = [];
-		for (const event of session.events) {
-			if (event.seq <= start.seq || event.seq >= turnEnd.seq || event.type !== "user/message") continue;
-			const message = storedMessage(String(session.id), event);
-			if (message !== void 0) messages.push(message);
-		}
-		if (this.addMessages(messages, true)) this.scheduleWrite();
+		const { completed } = this.referenceState(session);
+		if (completed?.seq !== turnEnd.seq) return;
+		if (this.addMessages(completed.messages, true)) this.scheduleWrite();
 	}
 	/** Select a frozen reference prefix, rotating only when a cache miss is expected. */
 	async select(session, signal) {
 		await this.flush();
 		signal.throwIfAborted();
-		const currentIds = currentMessageIds(session);
+		const currentIds = new Set(this.referenceState(session).userMessageIds);
 		const currentSignature = selectionSignature(this.selectedMessages(String(session.id), currentIds));
 		if (!(this.lastSentSignature !== void 0 && this.lastSentSignature === currentSignature) || this.state.newMessagesSinceRotation >= REFERENCE_COUNT) {
 			this.rotate(String(session.id), currentIds);
@@ -417,6 +449,11 @@ var RecentUserMessageStore = class {
 	async flush() {
 		await this.writes;
 		if (this.writeFailure !== void 0) throw this.writeFailure;
+	}
+	referenceState(session) {
+		const state = this.projections.stateOf(session, "composerCompletionReferences");
+		if (state === void 0) throw new Error("composer-completion: reference projection is not registered");
+		return state;
 	}
 	readState() {
 		try {
@@ -635,6 +672,7 @@ let ComposerCompletionService = (() => {
 		static inject = [
 			"llm",
 			"sessionController",
+			"sessionProjections",
 			"typert"
 		];
 		static Config = Config;
@@ -644,7 +682,8 @@ let ComposerCompletionService = (() => {
 		constructor(ctx, config) {
 			super(ctx, "composerCompletion", { namespace: "composerCompletion" });
 			this.resolved = resolveConfig(config);
-			this.recentUserMessages = new RecentUserMessageStore();
+			ctx.sessionProjections.register(referenceProjection);
+			this.recentUserMessages = new RecentUserMessageStore(ctx.sessionProjections);
 			this.generator = new CompletionGenerator(ctx, ctx.sessionController, this.recentUserMessages, this.resolved);
 			ctx.effect(() => async () => {
 				await this.recentUserMessages.flush();
