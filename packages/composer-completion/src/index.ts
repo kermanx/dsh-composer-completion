@@ -8,6 +8,7 @@ import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { CompletionGenerator } from './completion.ts'
 import { PROMPT_VERSION, promptFramingBytes } from './prompt.ts'
 import { RecentUserMessageStore, referenceProjection } from './recent-user-messages.ts'
+import { CompletionRequestLog } from './request-log.ts'
 import type {
   CompletionClientPolicy,
   CompletionFrame,
@@ -136,6 +137,7 @@ export class ComposerCompletionService extends TypertRemoteService {
       ctx.sessionController,
       this.recentUserMessages,
       this.resolved,
+      new CompletionRequestLog(),
     )
     ctx.effect(() => async () => {
       await this.recentUserMessages.flush()

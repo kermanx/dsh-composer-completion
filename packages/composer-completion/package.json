@@ -18,6 +18,10 @@
       "types": "./lib/types/types.d.ts",
       "default": "./lib/types/types.js"
     },
+    "./request-log": {
+      "types": "./lib/types/request-log.d.ts",
+      "default": "./lib/types/request-log.js"
+    },
     "./typert": {
       "types": "./lib/typert.host.d.ts",
       "default": "./lib/typert.host.js"
@@ -30,6 +34,7 @@
     "./package.json": "./package.json"
   },
   "files": [
+    "scripts/request-log.mjs",
     "lib/index.js",
     "lib/client.js",
     "lib/client.js.map",
@@ -41,10 +46,14 @@
     "lib/typert.remote-client.d.ts",
     "cordis.patch.yml"
   ],
+  "bin": {
+    "composer-completion-log": "./scripts/request-log.mjs"
+  },
   "scripts": {
     "build": "pnpm run build:host && pnpm run build:client",
     "build:host": "tsc -b ../../tsconfig.host.json --force && node scripts/generate-typert.mjs && tsdown --config tsdown.host.config.ts",
-    "build:client": "tsc -b ../../tsconfig.client.json --force && tsdown --config tsdown.client.config.ts"
+    "build:client": "tsc -b ../../tsconfig.client.json --force && tsdown --config tsdown.client.config.ts",
+    "test": "pnpm build && node --test tests/*.test.mjs"
   },
   "dsh": {
     "bundle": {
@@ -65,6 +74,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "proper-lockfile": "4.1.2",
     "zod": "^4.4.3"
   },
   "peerDependencies": {
@@ -143,6 +153,7 @@
     "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.2",
     "@deepseek-ai/schemastery": "3.18.5",
     "@types/node": "^24.3.0",
+    "@types/proper-lockfile": "4.1.4",
     "@types/react": "~18.3.1",
     "@types/react-dom": "~18.3.1",
     "react": "^18.2.0",

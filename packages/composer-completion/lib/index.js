@@ -1,12 +1,14 @@
 import z from "@deepseek-ai/schemastery";
 import { Remote, RemoteError, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import { ReasoningEffortId, createUserMessage } from "@deepseek-ai/dsh-llm";
-import { Buffer } from "node:buffer";
-import { readFileSync } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { Buffer as Buffer$1 } from "node:buffer";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, open, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { z as z$1 } from "zod";
+import lockfile from "proper-lockfile";
 import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
+import { z as z$1 } from "zod";
 //#region lib/types/prompt.js
 /** Cache-friendly prompt assembly for user-authored request continuation. */
 /** Changed whenever model-visible task framing or output protocol changes. */
@@ -52,9 +54,14 @@ const STOP_SEQUENCES = [
 function messageText$1(message) {
 	return message.content.filter((block) => block.type === "text").map((block) => block.text).join("");
 }
-function transcriptEntries(session) {
+/** Snapshot the model-visible user/assistant text history for prompt building and replay. */
+function completionTranscript(session) {
+	return completionTranscriptFromMessages(session.deriveMessages());
+}
+/** Extract prompt text from a captured conversation, preserving the original message IDs. */
+function completionTranscriptFromMessages(messages) {
 	const entries = [];
-	for (const message of session.deriveMessages()) {
+	for (const message of messages) {
 		if (message.role !== "assistant" && (message.role !== "user" || message.source.kind !== "user")) continue;
 		const text = messageText$1(message);
 		if (text.trim() === "") continue;
@@ -68,7 +75,7 @@ function transcriptEntries(session) {
 }
 /** Return the latest settled Assistant message used to fence a request. */
 function completionAnchor(session) {
-	const entry = transcriptEntries(session).at(-1);
+	const entry = completionTranscript(session).at(-1);
 	return entry?.role === "assistant" ? entry.id : void 0;
 }
 function textTail(text, maxBytes) {
@@ -81,7 +88,7 @@ function textTail(text, maxBytes) {
 		const previous = start > 0 ? text.charCodeAt(start - 1) : 0;
 		if (tail >= 56320 && tail <= 57343 && previous >= 55296 && previous <= 56319) start -= 1;
 		const piece = text.slice(start, end);
-		const nextBytes = bytes + Buffer.byteLength(piece);
+		const nextBytes = bytes + Buffer$1.byteLength(piece);
 		if (nextBytes > maxBytes) break;
 		pieces.push(piece);
 		bytes = nextBytes;
@@ -93,7 +100,7 @@ function renderEntry(entry) {
 	return `${entry.role === "user" ? USER_HEAD : ASSISTANT_HEAD}${entry.text}${ENTRY_SEPARATOR}`;
 }
 function referenceSection(references, maxBytes) {
-	const headBytes = Buffer.byteLength(REFERENCE_HEAD);
+	const headBytes = Buffer$1.byteLength(REFERENCE_HEAD);
 	if (references.length === 0 || headBytes >= maxBytes) return "";
 	const rendered = [];
 	let remaining = maxBytes - headBytes;
@@ -101,7 +108,7 @@ function referenceSection(references, maxBytes) {
 		const reference = references[index];
 		if (reference === void 0) continue;
 		const entry = `${REFERENCE_ENTRY_HEAD}${reference.text}${ENTRY_SEPARATOR}`;
-		const bytes = Buffer.byteLength(entry);
+		const bytes = Buffer$1.byteLength(entry);
 		if (bytes > remaining) break;
 		rendered.unshift(entry);
 		remaining -= bytes;
@@ -115,18 +122,18 @@ function transcriptHistory(entries, maxBytes) {
 		const entry = entries[index];
 		if (entry === void 0) continue;
 		const complete = renderEntry(entry);
-		const completeBytes = Buffer.byteLength(complete);
+		const completeBytes = Buffer$1.byteLength(complete);
 		if (completeBytes <= remaining) {
 			rendered.unshift(complete);
 			remaining -= completeBytes;
 			continue;
 		}
 		const head = entry.role === "user" ? USER_HEAD : ASSISTANT_HEAD;
-		const structuralBytes = Buffer.byteLength(head) + Buffer.byteLength(ENTRY_SEPARATOR);
+		const structuralBytes = Buffer$1.byteLength(head) + Buffer$1.byteLength(ENTRY_SEPARATOR);
 		let textBytes = remaining - structuralBytes;
 		if (textBytes > 0) {
-			const omitted = textBytes > Buffer.byteLength(OMITTED_TEXT) ? OMITTED_TEXT : "";
-			textBytes -= Buffer.byteLength(omitted);
+			const omitted = textBytes > Buffer$1.byteLength(OMITTED_TEXT) ? OMITTED_TEXT : "";
+			textBytes -= Buffer$1.byteLength(omitted);
 			const tail = textTail(entry.text, textBytes);
 			if (tail !== "") rendered.unshift(`${head}${omitted}${tail}${ENTRY_SEPARATOR}`);
 		}
@@ -134,15 +141,14 @@ function transcriptHistory(entries, maxBytes) {
 	}
 	return rendered.length === 0 ? void 0 : rendered.join("");
 }
-/** Assemble append-only history before the sole changing draft tail. */
-function buildCompletionPrompt(session, draft, references, maxInputBytes, maxDraftBytes) {
-	if (Buffer.byteLength(draft) > maxDraftBytes) return void 0;
-	const entries = transcriptEntries(session);
+/** Rebuild a prompt from a logged history without a live Session or its projections. */
+function buildCompletionPromptFromTranscript(entries, draft, references, maxInputBytes, maxDraftBytes) {
+	if (Buffer$1.byteLength(draft) > maxDraftBytes) return void 0;
 	const anchor = entries.at(-1);
 	if (anchor?.role !== "assistant") return void 0;
-	const contentBytes = maxInputBytes - Buffer.byteLength(TRANSCRIPT_HEAD) - Buffer.byteLength(CURRENT_INPUT_HEAD) - Buffer.byteLength(CURSOR_MARKER) - maxDraftBytes;
-	const reference = referenceSection(references, contentBytes - (Buffer.byteLength(ASSISTANT_HEAD) + Buffer.byteLength(ENTRY_SEPARATOR) + 1));
-	const history = transcriptHistory(entries, contentBytes - Buffer.byteLength(reference));
+	const contentBytes = maxInputBytes - Buffer$1.byteLength(TRANSCRIPT_HEAD) - Buffer$1.byteLength(CURRENT_INPUT_HEAD) - Buffer$1.byteLength(CURSOR_MARKER) - maxDraftBytes;
+	const reference = referenceSection(references, contentBytes - (Buffer$1.byteLength(ASSISTANT_HEAD) + Buffer$1.byteLength(ENTRY_SEPARATOR) + 1));
+	const history = transcriptHistory(entries, contentBytes - Buffer$1.byteLength(reference));
 	if (history === void 0) return void 0;
 	return {
 		anchorMessageId: anchor.id,
@@ -151,8 +157,359 @@ function buildCompletionPrompt(session, draft, references, maxInputBytes, maxDra
 }
 /** Byte floor required before any transcript content can fit. */
 function promptFramingBytes(maxDraftBytes) {
-	return maxDraftBytes + Buffer.byteLength(TRANSCRIPT_HEAD) + Buffer.byteLength(CURRENT_INPUT_HEAD) + Buffer.byteLength(CURSOR_MARKER) + Buffer.byteLength(ASSISTANT_HEAD) + Buffer.byteLength(ENTRY_SEPARATOR) + 1;
+	return maxDraftBytes + Buffer$1.byteLength(TRANSCRIPT_HEAD) + Buffer$1.byteLength(CURRENT_INPUT_HEAD) + Buffer$1.byteLength(CURSOR_MARKER) + Buffer$1.byteLength(ASSISTANT_HEAD) + Buffer$1.byteLength(ENTRY_SEPARATOR) + 1;
 }
+//#endregion
+//#region lib/types/storage.js
+/** Shared on-disk namespace for completion state and experiments. */
+/** Resolve DSH_HOME with the same home-directory expansion as the reference store. */
+function completionStoragePath(...parts) {
+	const configured = process.env.DSH_HOME;
+	let root = configured === void 0 || configured.trim() === "" ? join(homedir(), ".dsh") : configured;
+	if (root === "~") root = homedir();
+	else if (root.startsWith("~/") || root.startsWith("~\\")) root = join(homedir(), root.slice(2));
+	return join(resolve(root), "composer-completion", ...parts);
+}
+//#endregion
+//#region lib/types/request-log.js
+/** Self-contained JSON requests with a persistent, byte-bounded session LRU. */
+/** Hard ceiling for all JSON files, including session metadata (50 MiB). */
+const REQUEST_LOG_MAX_BYTES = 52428800;
+const ID = /^\d{13}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const PAYLOAD = /^(\d{13}-[0-9a-f-]{36})\.(request|result)\.json$/u;
+const TEMPORARY = /^\.\d{13}-[0-9a-f-]+\.tmp$/u;
+const SESSION = /^session-[0-9a-f]{64}$/u;
+const EVICTED = /^\.evicted-session-[0-9a-f]{64}-[0-9a-f-]{36}$/u;
+function jsonBytes(value) {
+	return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+}
+function sessionKey(sessionId) {
+	return `session-${createHash("sha256").update(sessionId).digest("hex")}`;
+}
+/** DSH usage events replace the previous snapshot; they are not token deltas. */
+function completionTokenUsage(result) {
+	if (result === void 0) return null;
+	const last = result.chunks.findLast((value) => value.chunk.type === "usage");
+	const usage = last?.chunk.type === "usage" ? last.chunk.usage : result.usage;
+	return usage == null ? null : structuredClone(usage);
+}
+function emptyTokenTotals() {
+	return {
+		requests: 0,
+		requestsWithoutUsage: 0,
+		requestsWithoutTotalTokens: 0,
+		uncachedInputTokens: 0,
+		outputTokens: 0,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+		reasoningTokens: 0,
+		countedTokens: 0,
+		knownTotalTokens: 0,
+		totalTokens: 0
+	};
+}
+function tokenCount(value) {
+	return value !== void 0 && Number.isSafeInteger(value) && value >= 0 ? value : void 0;
+}
+function addTokenUsage(totals, usage) {
+	totals.requests += 1;
+	const input = tokenCount(usage?.inputTokens);
+	const output = tokenCount(usage?.outputTokens);
+	if (input === void 0 || output === void 0) totals.requestsWithoutUsage += 1;
+	const cacheRead = tokenCount(usage?.cacheReadTokens) ?? 0;
+	const cacheWrite = tokenCount(usage?.cacheWriteTokens) ?? 0;
+	totals.uncachedInputTokens += input ?? 0;
+	totals.outputTokens += output ?? 0;
+	totals.cacheReadTokens += cacheRead;
+	totals.cacheWriteTokens += cacheWrite;
+	totals.reasoningTokens += tokenCount(usage?.reasoningTokens) ?? 0;
+	totals.countedTokens += (input ?? 0) + (output ?? 0) + cacheRead + cacheWrite;
+	const total = tokenCount(usage?.totalTokens);
+	if (total === void 0) totals.requestsWithoutTotalTokens += 1;
+	else totals.knownTotalTokens += total;
+	totals.totalTokens = totals.requestsWithoutTotalTokens === 0 ? totals.knownTotalTokens : null;
+}
+/** A session must fit as a whole: its individual requests are never pruned. */
+var RequestLogCapacityError = class extends Error {
+	constructor() {
+		super("composer-completion: request log session exceeds its byte budget");
+		this.name = "RequestLogCapacityError";
+	}
+};
+/** Capture ordinary and remote failures for later experiment inspection. */
+function loggedError(error) {
+	if (!(error instanceof Error)) return {
+		name: "Error",
+		message: String(error)
+	};
+	const code = Reflect.get(error, "code");
+	return {
+		name: error.name,
+		message: error.message,
+		...error.stack === void 0 ? {} : { stack: error.stack },
+		...typeof code === "string" ? { code } : {}
+	};
+}
+/**
+* Plain JSON request/result pairs grouped by session, coordinated by a directory lock.
+* session.json mtime is the durable access clock for every request in that session.
+*/
+var CompletionRequestLog = class {
+	directory;
+	maxBytes;
+	constructor(options = {}) {
+		this.directory = options.directory ?? completionStoragePath("requests");
+		this.maxBytes = options.maxBytes ?? 52428800;
+		if (!Number.isSafeInteger(this.maxBytes) || this.maxBytes <= 0 || this.maxBytes > 52428800) throw new RangeError(`request log maxBytes must be between 1 and ${REQUEST_LOG_MAX_BYTES}`);
+	}
+	/** Persist the full request before its model stream is opened. */
+	async begin(snapshot) {
+		const createdAt = Date.now();
+		const id = `${createdAt}-${randomUUID()}`;
+		const sessionId = snapshot.input.sessionId;
+		const key = sessionKey(sessionId);
+		const data = jsonBytes({
+			...snapshot,
+			version: 1,
+			id,
+			createdAt
+		});
+		const metadata = jsonBytes({
+			version: 1,
+			sessionId
+		});
+		await this.locked(async (sessions) => {
+			const session = sessions.find((value) => value.sessionId === sessionId);
+			const additional = data.length + (session === void 0 ? metadata.length : 0);
+			await this.checkSessionCapacity(session, additional);
+			await this.makeRoom(sessions, additional, sessionId);
+			await mkdir(join(this.directory, key), {
+				recursive: true,
+				mode: 448
+			});
+			if (session === void 0) await this.write(this.metadataPath(key), metadata, id);
+			await this.write(this.path(key, id, "request"), data, id);
+			await this.touch(key, sessions);
+		});
+		return id;
+	}
+	/** Attach one settlement; an evicted in-flight request is never resurrected. */
+	async finish(id, result) {
+		this.validateId(id);
+		const data = jsonBytes({
+			version: 1,
+			id,
+			result: {
+				...result,
+				usage: completionTokenUsage(result)
+			}
+		});
+		return this.locked(async (sessions) => {
+			const session = sessions.find((value) => value.entries.some((entry) => entry.id === id));
+			const entry = session?.entries.find((value) => value.id === id);
+			if (session === void 0 || entry === void 0) return false;
+			if (entry.hasResult) throw new Error(`request log ${id} already has a result`);
+			await this.checkSessionCapacity(session, data.length);
+			await this.makeRoom(sessions, data.length, session.sessionId);
+			await this.write(this.path(session.key, id, "result"), data, id);
+			await this.touch(session.key, sessions);
+			return true;
+		});
+	}
+	/** Read a self-contained request and refresh the entire session's LRU position. */
+	async read(id) {
+		this.validateId(id);
+		return this.locked(async (sessions) => {
+			const session = sessions.find((value) => value.entries.some((entry) => entry.id === id));
+			const entry = session?.entries.find((value) => value.id === id);
+			if (session === void 0 || entry === void 0) throw new Error(`request log ${id} was not found (possibly evicted)`);
+			const record = JSON.parse(await readFile(this.path(session.key, id, "request"), "utf8"));
+			if (record.version !== 1 || record.id !== id || record.input.sessionId !== session.sessionId) throw new Error(`unsupported request log ${id}`);
+			let result;
+			if (entry.hasResult) result = await this.readResult(session.key, id);
+			await this.touch(session.key, sessions);
+			return {
+				...record,
+				...result === void 0 ? {} : { result }
+			};
+		});
+	}
+	/** Inspect newest requests first without refreshing any session's access time. */
+	async list() {
+		return (await this.listSessions()).flatMap((session) => session.entries).sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
+	}
+	/** Inspect sessions and their complete byte cost, most recently accessed first. */
+	async listSessions() {
+		return this.locked(async (sessions) => {
+			return (await this.makeRoom(sessions, 0)).sort((a, b) => b.accessedAt - a.accessedAt || a.sessionId.localeCompare(b.sessionId)).map((session) => ({
+				sessionId: session.sessionId,
+				accessedAt: session.accessedAt,
+				bytes: session.bytes,
+				entries: session.entries
+			}));
+		});
+	}
+	/** Aggregate saved usage without refreshing session recency or making model calls. */
+	async usage() {
+		return this.locked(async (sessions) => {
+			const total = emptyTokenTotals();
+			const summaries = [];
+			for (const session of sessions) {
+				const summary = {
+					sessionId: session.sessionId,
+					...emptyTokenTotals()
+				};
+				for (const entry of session.entries) {
+					const usage = completionTokenUsage(entry.hasResult ? await this.readResult(session.key, entry.id) : void 0);
+					addTokenUsage(summary, usage);
+					addTokenUsage(total, usage);
+				}
+				summaries.push(summary);
+			}
+			return {
+				scope: "retained-logs",
+				total,
+				sessions: summaries.sort((a, b) => a.sessionId.localeCompare(b.sessionId))
+			};
+		});
+	}
+	async readResult(key, id) {
+		const envelope = JSON.parse(await readFile(this.path(key, id, "result"), "utf8"));
+		if (envelope.version !== 1 || envelope.id !== id) throw new Error(`unsupported request log result ${id}`);
+		return envelope.result;
+	}
+	metadataPath(key) {
+		return join(this.directory, key, "session.json");
+	}
+	path(key, id, kind) {
+		return join(this.directory, key, `${id}.${kind}.json`);
+	}
+	validateId(id) {
+		if (!ID.test(id)) throw new Error("invalid completion request log id");
+	}
+	async locked(operation) {
+		await mkdir(this.directory, {
+			recursive: true,
+			mode: 448
+		});
+		const release = await lockfile.lock(this.directory, { retries: {
+			retries: 20,
+			minTimeout: 20,
+			maxTimeout: 250
+		} });
+		try {
+			return await operation(await this.scan());
+		} finally {
+			await release();
+		}
+	}
+	async scan() {
+		const sessions = [];
+		for (const directory of await readdir(this.directory, { withFileTypes: true })) {
+			if (!directory.isDirectory()) continue;
+			const path = join(this.directory, directory.name);
+			if (EVICTED.test(directory.name)) await rm(path, {
+				recursive: true,
+				force: true
+			});
+			else if (SESSION.test(directory.name)) {
+				const session = await this.scanSession(directory.name);
+				if (session !== void 0) sessions.push(session);
+			}
+		}
+		return sessions;
+	}
+	async scanSession(key) {
+		const requests = /* @__PURE__ */ new Map();
+		const results = /* @__PURE__ */ new Map();
+		const directory = join(this.directory, key);
+		for (const file of await readdir(directory, { withFileTypes: true })) {
+			if (!file.isFile()) continue;
+			const path = join(directory, file.name);
+			if (TEMPORARY.test(file.name)) {
+				await rm(path);
+				continue;
+			}
+			const match = PAYLOAD.exec(file.name);
+			if (match?.[1] === void 0 || !ID.test(match[1])) continue;
+			const info = await stat(path);
+			if (match[2] === "request") requests.set(match[1], info.size);
+			else results.set(match[1], info.size);
+		}
+		for (const id of results.keys()) if (!requests.has(id)) await rm(this.path(key, id, "result"));
+		if (requests.size === 0) {
+			await rm(directory, {
+				recursive: true,
+				force: true
+			});
+			return;
+		}
+		const metadata = JSON.parse(await readFile(this.metadataPath(key), "utf8"));
+		if (metadata.version !== 1 || typeof metadata.sessionId !== "string" || sessionKey(metadata.sessionId) !== key) throw new Error(`unsupported request log session ${key}`);
+		const info = await stat(this.metadataPath(key));
+		const entries = [...requests].map(([id, bytes]) => ({
+			id,
+			sessionId: metadata.sessionId,
+			createdAt: Number(id.slice(0, 13)),
+			accessedAt: info.mtimeMs,
+			bytes: bytes + (results.get(id) ?? 0),
+			hasResult: results.has(id)
+		}));
+		return {
+			key,
+			sessionId: metadata.sessionId,
+			accessedAt: info.mtimeMs,
+			entries,
+			bytes: info.size + entries.reduce((total, entry) => total + entry.bytes, 0)
+		};
+	}
+	async checkSessionCapacity(session, additional) {
+		if ((session?.bytes ?? 0) + additional <= this.maxBytes) return;
+		if (session !== void 0) await this.removeSession(session);
+		throw new RequestLogCapacityError();
+	}
+	async makeRoom(sessions, bytes, protectedSessionId) {
+		let total = sessions.reduce((sum, session) => sum + session.bytes, 0);
+		const removed = /* @__PURE__ */ new Set();
+		const oldest = [...sessions].sort((a, b) => a.accessedAt - b.accessedAt || a.sessionId.localeCompare(b.sessionId));
+		for (const session of oldest) {
+			if (total + bytes <= this.maxBytes) break;
+			if (session.sessionId === protectedSessionId) continue;
+			await this.removeSession(session);
+			total -= session.bytes;
+			removed.add(session.sessionId);
+		}
+		if (total + bytes > this.maxBytes) throw new RequestLogCapacityError();
+		return sessions.filter((session) => !removed.has(session.sessionId));
+	}
+	async removeSession(session) {
+		const evicted = join(this.directory, `.evicted-${session.key}-${randomUUID()}`);
+		await rename(join(this.directory, session.key), evicted);
+		await rm(evicted, {
+			recursive: true,
+			force: true
+		});
+	}
+	async touch(key, sessions) {
+		const time = sessions.reduce((latest, session) => Math.max(latest, session.accessedAt + 1), Date.now()) / 1e3;
+		await utimes(this.metadataPath(key), time, time);
+	}
+	async write(path, data, id) {
+		const temporary = join(dirname(path), `.${id}-${randomUUID()}.tmp`);
+		try {
+			const file = await open(temporary, "wx", 384);
+			try {
+				await file.writeFile(data);
+				await file.sync();
+			} finally {
+				await file.close();
+			}
+			await rename(temporary, path);
+		} finally {
+			await rm(temporary, { force: true });
+		}
+	}
+};
 //#endregion
 //#region lib/types/completion.js
 /** Host-side completion generation and output-protocol decoding. */
@@ -224,11 +581,15 @@ var CompletionGenerator = class {
 	sessionController;
 	recentUserMessages;
 	config;
-	constructor(ctx, sessionController, recentUserMessages, config) {
+	requestLog;
+	onLogError;
+	constructor(ctx, sessionController, recentUserMessages, config, requestLog, onLogError = (error) => ctx.logger.warn("Could not write completion request log: %s", error)) {
 		this.ctx = ctx;
 		this.sessionController = sessionController;
 		this.recentUserMessages = recentUserMessages;
 		this.config = config;
+		this.requestLog = requestLog;
+		this.onLogError = onLogError;
 	}
 	/** Stream full replacement-suffix snapshots for the addressed draft. */
 	async *complete(request, signal) {
@@ -239,7 +600,9 @@ var CompletionGenerator = class {
 		if ("error" in resolved) throw resolved.error;
 		const { agent } = resolved;
 		const references = await this.recentUserMessages.select(agent.session, requestSignal);
-		const prompt = buildCompletionPrompt(agent.session, request.draft, references.messages, this.config.maxInputBytes, this.config.maxDraftBytes);
+		const history = agent.session.deriveMessages();
+		const transcript = completionTranscriptFromMessages(history);
+		const prompt = buildCompletionPromptFromTranscript(transcript, request.draft, references.messages, this.config.maxInputBytes, this.config.maxDraftBytes);
 		if (prompt === void 0) return;
 		const context = {
 			anchorMessageId: prompt.anchorMessageId,
@@ -261,49 +624,102 @@ var CompletionGenerator = class {
 			system: SYSTEM_PROMPT,
 			temperature: this.config.temperature,
 			maxTokens: this.config.maxOutputTokens,
-			stop: [...STOP_SEQUENCES],
-			signal: requestSignal
+			stop: [...STOP_SEQUENCES]
 		};
+		const started = performance.now();
+		let logId;
+		try {
+			logId = await this.requestLog.begin({
+				input: request,
+				context,
+				history,
+				transcript,
+				references: references.messages,
+				config: this.config,
+				request: options
+			});
+		} catch (error) {
+			this.onLogError(error);
+		}
 		const decoder = new CompletionProtocolDecoder();
+		const chunks = [];
+		let status = "interrupted";
+		let error;
+		let dispatchedAt;
 		let visible = "";
-		this.recentUserMessages.markSent(references.signature);
-		for await (const chunk of this.ctx.llm.stream(options)) {
-			if (requestSignal.aborted) return;
-			if (completionAnchor(agent.session) !== prompt.anchorMessageId) return;
-			if (chunk.type === "finish") {
-				throwForFinish(chunk.reason, requestSignal);
-				continue;
+		const abortedStatus = () => signal.aborted ? "cancelled" : "timeout";
+		try {
+			requestSignal.throwIfAborted();
+			this.recentUserMessages.markSent(references.signature);
+			dispatchedAt = Date.now();
+			for await (const chunk of this.ctx.llm.stream({
+				...options,
+				signal: requestSignal
+			})) {
+				chunks.push({
+					elapsedMs: performance.now() - started,
+					chunk: structuredClone(chunk)
+				});
+				if (requestSignal.aborted) {
+					status = abortedStatus();
+					return;
+				}
+				if (completionAnchor(agent.session) !== prompt.anchorMessageId) {
+					status = "stale";
+					return;
+				}
+				if (chunk.type === "finish") {
+					throwForFinish(chunk.reason, requestSignal);
+					continue;
+				}
+				if (chunk.type !== "text-delta") continue;
+				const next = decoder.push(chunk.text, this.config.maxOutputCharacters);
+				if (next === void 0 || next === visible) continue;
+				visible = next;
+				yield {
+					type: "update",
+					context,
+					text: visible
+				};
 			}
-			if (chunk.type !== "text-delta") continue;
-			const next = decoder.push(chunk.text, this.config.maxOutputCharacters);
-			if (next === void 0 || next === visible) continue;
-			visible = next;
+			if (requestSignal.aborted) {
+				status = abortedStatus();
+				return;
+			}
+			if (completionAnchor(agent.session) !== prompt.anchorMessageId) {
+				status = "stale";
+				return;
+			}
+			visible = decoder.finish(this.config.maxOutputCharacters);
+			status = "completed";
 			yield {
-				type: "update",
+				type: "done",
 				context,
 				text: visible
 			};
+		} catch (failure) {
+			status = requestSignal.aborted ? abortedStatus() : "error";
+			error = loggedError(failure);
+			throw failure;
+		} finally {
+			if (status === "interrupted" && requestSignal.aborted) status = abortedStatus();
+			if ((status === "cancelled" || status === "timeout") && error === void 0) error = loggedError(requestSignal.reason);
+			if (logId !== void 0) try {
+				await this.requestLog.finish(logId, {
+					status,
+					finishedAt: Date.now(),
+					durationMs: performance.now() - started,
+					chunks,
+					completion: visible,
+					...dispatchedAt === void 0 ? {} : { dispatchedAt },
+					...error === void 0 ? {} : { error }
+				});
+			} catch (failure) {
+				this.onLogError(failure);
+			}
 		}
-		if (completionAnchor(agent.session) !== prompt.anchorMessageId) return;
-		visible = decoder.finish(this.config.maxOutputCharacters);
-		yield {
-			type: "done",
-			context,
-			text: visible
-		};
 	}
 };
-//#endregion
-//#region lib/types/storage.js
-/** Shared on-disk namespace for completion state and experiments. */
-/** Resolve DSH_HOME with the same home-directory expansion as the reference store. */
-function completionStoragePath(...parts) {
-	const configured = process.env.DSH_HOME;
-	let root = configured === void 0 || configured.trim() === "" ? join(homedir(), ".dsh") : configured;
-	if (root === "~") root = homedir();
-	else if (root.startsWith("~/") || root.startsWith("~\\")) root = join(homedir(), root.slice(2));
-	return join(resolve(root), "composer-completion", ...parts);
-}
 //#endregion
 //#region lib/types/recent-user-messages.js
 /** Cross-Session user-request references for composer completion. */
@@ -684,7 +1100,7 @@ let ComposerCompletionService = (() => {
 			this.resolved = resolveConfig(config);
 			ctx.sessionProjections.register(referenceProjection);
 			this.recentUserMessages = new RecentUserMessageStore(ctx.sessionProjections);
-			this.generator = new CompletionGenerator(ctx, ctx.sessionController, this.recentUserMessages, this.resolved);
+			this.generator = new CompletionGenerator(ctx, ctx.sessionController, this.recentUserMessages, this.resolved, new CompletionRequestLog());
 			ctx.effect(() => async () => {
 				await this.recentUserMessages.flush();
 			}, "composer-completion.recent-user-messages");

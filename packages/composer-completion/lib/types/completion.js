@@ -1,7 +1,8 @@
 /** Host-side completion generation and output-protocol decoding. */
 import { createUserMessage, ReasoningEffortId, } from '@deepseek-ai/dsh-llm';
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol';
-import { buildCompletionPrompt, completionAnchor, PROMPT_VERSION, STOP_SEQUENCES, SYSTEM_PROMPT, } from "./prompt.js";
+import { buildCompletionPromptFromTranscript, completionAnchor, completionTranscriptFromMessages, PROMPT_VERSION, STOP_SEQUENCES, SYSTEM_PROMPT, } from "./prompt.js";
+import { loggedError, } from "./request-log.js";
 class CompletionProtocolDecoder {
     static OPEN = '<COMPLETION>';
     static CLOSE = '</COMPLETION>';
@@ -85,11 +86,15 @@ export class CompletionGenerator {
     sessionController;
     recentUserMessages;
     config;
-    constructor(ctx, sessionController, recentUserMessages, config) {
+    requestLog;
+    onLogError;
+    constructor(ctx, sessionController, recentUserMessages, config, requestLog, onLogError = error => ctx.logger.warn('Could not write completion request log: %s', error)) {
         this.ctx = ctx;
         this.sessionController = sessionController;
         this.recentUserMessages = recentUserMessages;
         this.config = config;
+        this.requestLog = requestLog;
+        this.onLogError = onLogError;
     }
     /** Stream full replacement-suffix snapshots for the addressed draft. */
     async *complete(request, signal) {
@@ -102,7 +107,9 @@ export class CompletionGenerator {
             throw resolved.error;
         const { agent } = resolved;
         const references = await this.recentUserMessages.select(agent.session, requestSignal);
-        const prompt = buildCompletionPrompt(agent.session, request.draft, references.messages, this.config.maxInputBytes, this.config.maxDraftBytes);
+        const history = agent.session.deriveMessages();
+        const transcript = completionTranscriptFromMessages(history);
+        const prompt = buildCompletionPromptFromTranscript(transcript, request.draft, references.messages, this.config.maxInputBytes, this.config.maxDraftBytes);
         if (prompt === undefined)
             return;
         const context = {
@@ -123,32 +130,88 @@ export class CompletionGenerator {
             temperature: this.config.temperature,
             maxTokens: this.config.maxOutputTokens,
             stop: [...STOP_SEQUENCES],
-            signal: requestSignal,
         };
-        const decoder = new CompletionProtocolDecoder();
-        let visible = '';
-        this.recentUserMessages.markSent(references.signature);
-        for await (const chunk of this.ctx.llm.stream(options)) {
-            if (requestSignal.aborted)
-                return;
-            if (completionAnchor(agent.session) !== prompt.anchorMessageId)
-                return;
-            if (chunk.type === 'finish') {
-                throwForFinish(chunk.reason, requestSignal);
-                continue;
-            }
-            if (chunk.type !== 'text-delta')
-                continue;
-            const next = decoder.push(chunk.text, this.config.maxOutputCharacters);
-            if (next === undefined || next === visible)
-                continue;
-            visible = next;
-            yield { type: 'update', context, text: visible };
+        const started = performance.now();
+        let logId;
+        try {
+            logId = await this.requestLog.begin({
+                input: request, context, history, transcript, references: references.messages,
+                config: this.config, request: options,
+            });
         }
-        if (completionAnchor(agent.session) !== prompt.anchorMessageId)
-            return;
-        visible = decoder.finish(this.config.maxOutputCharacters);
-        yield { type: 'done', context, text: visible };
+        catch (error) {
+            this.onLogError(error);
+        }
+        const decoder = new CompletionProtocolDecoder();
+        const chunks = [];
+        let status = 'interrupted';
+        let error;
+        let dispatchedAt;
+        let visible = '';
+        const abortedStatus = () => signal.aborted ? 'cancelled' : 'timeout';
+        try {
+            requestSignal.throwIfAborted();
+            this.recentUserMessages.markSent(references.signature);
+            dispatchedAt = Date.now();
+            for await (const chunk of this.ctx.llm.stream({ ...options, signal: requestSignal })) {
+                chunks.push({ elapsedMs: performance.now() - started, chunk: structuredClone(chunk) });
+                if (requestSignal.aborted) {
+                    status = abortedStatus();
+                    return;
+                }
+                if (completionAnchor(agent.session) !== prompt.anchorMessageId) {
+                    status = 'stale';
+                    return;
+                }
+                if (chunk.type === 'finish') {
+                    throwForFinish(chunk.reason, requestSignal);
+                    continue;
+                }
+                if (chunk.type !== 'text-delta')
+                    continue;
+                const next = decoder.push(chunk.text, this.config.maxOutputCharacters);
+                if (next === undefined || next === visible)
+                    continue;
+                visible = next;
+                yield { type: 'update', context, text: visible };
+            }
+            if (requestSignal.aborted) {
+                status = abortedStatus();
+                return;
+            }
+            if (completionAnchor(agent.session) !== prompt.anchorMessageId) {
+                status = 'stale';
+                return;
+            }
+            visible = decoder.finish(this.config.maxOutputCharacters);
+            status = 'completed';
+            yield { type: 'done', context, text: visible };
+        }
+        catch (failure) {
+            status = requestSignal.aborted ? abortedStatus() : 'error';
+            error = loggedError(failure);
+            throw failure;
+        }
+        finally {
+            if (status === 'interrupted' && requestSignal.aborted)
+                status = abortedStatus();
+            if ((status === 'cancelled' || status === 'timeout') && error === undefined) {
+                error = loggedError(requestSignal.reason);
+            }
+            if (logId !== undefined) {
+                try {
+                    await this.requestLog.finish(logId, {
+                        status, finishedAt: Date.now(), durationMs: performance.now() - started,
+                        chunks, completion: visible,
+                        ...(dispatchedAt === undefined ? {} : { dispatchedAt }),
+                        ...(error === undefined ? {} : { error }),
+                    });
+                }
+                catch (failure) {
+                    this.onLogError(failure);
+                }
+            }
+        }
     }
 }
 //# sourceMappingURL=completion.js.map

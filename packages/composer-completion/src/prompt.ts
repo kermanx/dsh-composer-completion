@@ -49,7 +49,8 @@ export const STOP_SEQUENCES = [
   CURSOR_MARKER,
 ]
 
-interface TranscriptEntry {
+/** One untruncated text message visible to the completion prompt builder. */
+export interface TranscriptEntry {
   readonly id: MessageId
   readonly role: 'user' | 'assistant'
   readonly text: string
@@ -68,9 +69,15 @@ function messageText(message: Message): string {
     .join('')
 }
 
-function transcriptEntries(session: Session): TranscriptEntry[] {
+/** Snapshot the model-visible user/assistant text history for prompt building and replay. */
+export function completionTranscript(session: Session): TranscriptEntry[] {
+  return completionTranscriptFromMessages(session.deriveMessages())
+}
+
+/** Extract prompt text from a captured conversation, preserving the original message IDs. */
+export function completionTranscriptFromMessages(messages: readonly Message[]): TranscriptEntry[] {
   const entries: TranscriptEntry[] = []
-  for (const message of session.deriveMessages()) {
+  for (const message of messages) {
     if (message.role !== 'assistant'
       && (message.role !== 'user' || message.source.kind !== 'user')) continue
     const text = messageText(message)
@@ -82,7 +89,7 @@ function transcriptEntries(session: Session): TranscriptEntry[] {
 
 /** Return the latest settled Assistant message used to fence a request. */
 export function completionAnchor(session: Session): MessageId | undefined {
-  const entry = transcriptEntries(session).at(-1)
+  const entry = completionTranscript(session).at(-1)
   return entry?.role === 'assistant' ? entry.id : undefined
 }
 
@@ -167,8 +174,20 @@ export function buildCompletionPrompt(
   maxInputBytes: number,
   maxDraftBytes: number,
 ): CompletionPrompt | undefined {
+  return buildCompletionPromptFromTranscript(
+    completionTranscript(session), draft, references, maxInputBytes, maxDraftBytes,
+  )
+}
+
+/** Rebuild a prompt from a logged history without a live Session or its projections. */
+export function buildCompletionPromptFromTranscript(
+  entries: readonly TranscriptEntry[],
+  draft: string,
+  references: readonly ReferenceUserMessage[],
+  maxInputBytes: number,
+  maxDraftBytes: number,
+): CompletionPrompt | undefined {
   if (Buffer.byteLength(draft) > maxDraftBytes) return undefined
-  const entries = transcriptEntries(session)
   const anchor = entries.at(-1)
   if (anchor?.role !== 'assistant') return undefined
   const contentBytes = maxInputBytes

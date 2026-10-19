@@ -46,9 +46,14 @@ function messageText(message) {
         .map(block => block.text)
         .join('');
 }
-function transcriptEntries(session) {
+/** Snapshot the model-visible user/assistant text history for prompt building and replay. */
+export function completionTranscript(session) {
+    return completionTranscriptFromMessages(session.deriveMessages());
+}
+/** Extract prompt text from a captured conversation, preserving the original message IDs. */
+export function completionTranscriptFromMessages(messages) {
     const entries = [];
-    for (const message of session.deriveMessages()) {
+    for (const message of messages) {
         if (message.role !== 'assistant'
             && (message.role !== 'user' || message.source.kind !== 'user'))
             continue;
@@ -61,7 +66,7 @@ function transcriptEntries(session) {
 }
 /** Return the latest settled Assistant message used to fence a request. */
 export function completionAnchor(session) {
-    const entry = transcriptEntries(session).at(-1);
+    const entry = completionTranscript(session).at(-1);
     return entry?.role === 'assistant' ? entry.id : undefined;
 }
 function textTail(text, maxBytes) {
@@ -138,9 +143,12 @@ function transcriptHistory(entries, maxBytes) {
 }
 /** Assemble append-only history before the sole changing draft tail. */
 export function buildCompletionPrompt(session, draft, references, maxInputBytes, maxDraftBytes) {
+    return buildCompletionPromptFromTranscript(completionTranscript(session), draft, references, maxInputBytes, maxDraftBytes);
+}
+/** Rebuild a prompt from a logged history without a live Session or its projections. */
+export function buildCompletionPromptFromTranscript(entries, draft, references, maxInputBytes, maxDraftBytes) {
     if (Buffer.byteLength(draft) > maxDraftBytes)
         return undefined;
-    const entries = transcriptEntries(session);
     const anchor = entries.at(-1);
     if (anchor?.role !== 'assistant')
         return undefined;

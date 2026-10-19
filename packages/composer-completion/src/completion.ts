@@ -5,20 +5,28 @@ import {
   createUserMessage,
   ReasoningEffortId,
   type FinishReason,
-  type GenerateOptions,
   type Message,
 } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import type { SessionController } from '@deepseek-ai/dsh-api-session-controller'
 import {
-  buildCompletionPrompt,
+  buildCompletionPromptFromTranscript,
   completionAnchor,
+  completionTranscriptFromMessages,
   PROMPT_VERSION,
   STOP_SEQUENCES,
   SYSTEM_PROMPT,
 } from './prompt.ts'
 import type { RecentUserMessageStore } from './recent-user-messages.ts'
+import {
+  CompletionRequestLog,
+  loggedError,
+  type CompletionLogStatus,
+  type LoggedChunk,
+  type LoggedError,
+  type SavedGenerateOptions,
+} from './request-log.ts'
 import type {
   CompletionContext,
   CompletionFrame,
@@ -123,6 +131,8 @@ export class CompletionGenerator {
     private readonly sessionController: SessionController,
     private readonly recentUserMessages: RecentUserMessageStore,
     private readonly config: ResolvedConfig,
+    private readonly requestLog: CompletionRequestLog,
+    private readonly onLogError: (error: unknown) => void = error => ctx.logger.warn('Could not write completion request log: %s', error),
   ) {}
 
   /** Stream full replacement-suffix snapshots for the addressed draft. */
@@ -137,8 +147,10 @@ export class CompletionGenerator {
       agent.session,
       requestSignal,
     )
-    const prompt = buildCompletionPrompt(
-      agent.session,
+    const history = agent.session.deriveMessages()
+    const transcript = completionTranscriptFromMessages(history)
+    const prompt = buildCompletionPromptFromTranscript(
+      transcript,
       request.draft,
       references.messages,
       this.config.maxInputBytes,
@@ -155,7 +167,7 @@ export class CompletionGenerator {
       content: [{ type: 'text', text: prompt.text }],
       source: { kind: 'composer-completion' },
     })]
-    const options: GenerateOptions = {
+    const options: SavedGenerateOptions = {
       provider: this.config.provider,
       model: this.config.model,
       reasoningEffort: ReasoningEffortId(this.config.reasoningEffort),
@@ -164,27 +176,81 @@ export class CompletionGenerator {
       temperature: this.config.temperature,
       maxTokens: this.config.maxOutputTokens,
       stop: [...STOP_SEQUENCES],
-      signal: requestSignal,
     }
 
-    const decoder = new CompletionProtocolDecoder()
-    let visible = ''
-    this.recentUserMessages.markSent(references.signature)
-    for await (const chunk of this.ctx.llm.stream(options)) {
-      if (requestSignal.aborted) return
-      if (completionAnchor(agent.session) !== prompt.anchorMessageId) return
-      if (chunk.type === 'finish') {
-        throwForFinish(chunk.reason, requestSignal)
-        continue
-      }
-      if (chunk.type !== 'text-delta') continue
-      const next = decoder.push(chunk.text, this.config.maxOutputCharacters)
-      if (next === undefined || next === visible) continue
-      visible = next
-      yield { type: 'update', context, text: visible }
+    const started = performance.now()
+    let logId: string | undefined
+    try {
+      logId = await this.requestLog.begin({
+        input: request, context, history, transcript, references: references.messages,
+        config: this.config, request: options,
+      })
+    } catch (error) {
+      this.onLogError(error)
     }
-    if (completionAnchor(agent.session) !== prompt.anchorMessageId) return
-    visible = decoder.finish(this.config.maxOutputCharacters)
-    yield { type: 'done', context, text: visible }
+    const decoder = new CompletionProtocolDecoder()
+    const chunks: LoggedChunk[] = []
+    let status: CompletionLogStatus = 'interrupted'
+    let error: LoggedError | undefined
+    let dispatchedAt: number | undefined
+    let visible = ''
+    const abortedStatus = (): CompletionLogStatus => signal.aborted ? 'cancelled' : 'timeout'
+    try {
+      requestSignal.throwIfAborted()
+      this.recentUserMessages.markSent(references.signature)
+      dispatchedAt = Date.now()
+      for await (const chunk of this.ctx.llm.stream({ ...options, signal: requestSignal })) {
+        chunks.push({ elapsedMs: performance.now() - started, chunk: structuredClone(chunk) })
+        if (requestSignal.aborted) {
+          status = abortedStatus()
+          return
+        }
+        if (completionAnchor(agent.session) !== prompt.anchorMessageId) {
+          status = 'stale'
+          return
+        }
+        if (chunk.type === 'finish') {
+          throwForFinish(chunk.reason, requestSignal)
+          continue
+        }
+        if (chunk.type !== 'text-delta') continue
+        const next = decoder.push(chunk.text, this.config.maxOutputCharacters)
+        if (next === undefined || next === visible) continue
+        visible = next
+        yield { type: 'update', context, text: visible }
+      }
+      if (requestSignal.aborted) {
+        status = abortedStatus()
+        return
+      }
+      if (completionAnchor(agent.session) !== prompt.anchorMessageId) {
+        status = 'stale'
+        return
+      }
+      visible = decoder.finish(this.config.maxOutputCharacters)
+      status = 'completed'
+      yield { type: 'done', context, text: visible }
+    } catch (failure) {
+      status = requestSignal.aborted ? abortedStatus() : 'error'
+      error = loggedError(failure)
+      throw failure
+    } finally {
+      if (status === 'interrupted' && requestSignal.aborted) status = abortedStatus()
+      if ((status === 'cancelled' || status === 'timeout') && error === undefined) {
+        error = loggedError(requestSignal.reason)
+      }
+      if (logId !== undefined) {
+        try {
+          await this.requestLog.finish(logId, {
+            status, finishedAt: Date.now(), durationMs: performance.now() - started,
+            chunks, completion: visible,
+            ...(dispatchedAt === undefined ? {} : { dispatchedAt }),
+            ...(error === undefined ? {} : { error }),
+          })
+        } catch (failure) {
+          this.onLogError(failure)
+        }
+      }
+    }
   }
 }

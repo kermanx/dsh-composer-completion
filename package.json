@@ -3,7 +3,8 @@
   "private": true,
   "packageManager": "pnpm@10.16.1",
   "scripts": {
-    "build": "pnpm --filter @kermanx/dsh-composer-completion build"
+    "build": "pnpm --filter @kermanx/dsh-composer-completion build",
+    "test": "pnpm --filter @kermanx/dsh-composer-completion test"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

@@ -11,6 +11,7 @@
     "src/completion.ts",
     "src/prompt.ts",
     "src/recent-user-messages.ts",
+    "src/request-log.ts",
     "src/storage.ts",
     "src/types.ts"
   ]

@@ -38,6 +38,7 @@ import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
 import { CompletionGenerator } from "./completion.js";
 import { PROMPT_VERSION, promptFramingBytes } from "./prompt.js";
 import { RecentUserMessageStore, referenceProjection } from "./recent-user-messages.js";
+import { CompletionRequestLog } from "./request-log.js";
 const DEFAULTS = {
     enabled: true,
     provider: 'deepseek-official',
@@ -118,7 +119,7 @@ let ComposerCompletionService = (() => {
             this.resolved = resolveConfig(config);
             ctx.sessionProjections.register(referenceProjection);
             this.recentUserMessages = new RecentUserMessageStore(ctx.sessionProjections);
-            this.generator = new CompletionGenerator(ctx, ctx.sessionController, this.recentUserMessages, this.resolved);
+            this.generator = new CompletionGenerator(ctx, ctx.sessionController, this.recentUserMessages, this.resolved, new CompletionRequestLog());
             ctx.effect(() => async () => {
                 await this.recentUserMessages.flush();
             }, 'composer-completion.recent-user-messages');

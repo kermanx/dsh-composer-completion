@@ -77,7 +77,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: _kermanx_dsh_composer_completion_composerCompletion_complete_result$schema,
         jsonSchema: {"oneOf":[{"type":"object","properties":{"type":{"type":"string","const":"update"},"context":{"type":"object","properties":{"anchorMessageId":{"type":"string"},"model":{"type":"string"},"promptVersion":{"type":"string"}},"required":["anchorMessageId","model","promptVersion"],"additionalProperties":true},"text":{"type":"string"}},"required":["type","context","text"],"additionalProperties":true},{"type":"object","properties":{"type":{"type":"string","const":"done"},"context":{"type":"object","properties":{"anchorMessageId":{"type":"string"},"model":{"type":"string"},"promptVersion":{"type":"string"}},"required":["anchorMessageId","model","promptVersion"],"additionalProperties":true},"text":{"type":"string"}},"required":["type","context","text"],"additionalProperties":true}]},
       },
-      sourceLocation: {"file":"packages/composer-completion/src/index.ts","line":166,"column":3},
+      sourceLocation: {"file":"packages/composer-completion/src/index.ts","line":168,"column":3},
     },
     'composerCompletion/policy': {
       service: 'composerCompletion',
@@ -91,7 +91,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: _kermanx_dsh_composer_completion_composerCompletion_policy_result$schema,
         jsonSchema: {"type":"object","properties":{"enabled":{"type":"boolean"},"model":{"type":"string"},"promptVersion":{"type":"string"},"debounceMs":{"type":"number"},"minPrefixCharacters":{"type":"number"},"requestTimeoutMs":{"type":"number"},"maxOutputCharacters":{"type":"number"},"cacheEntries":{"type":"number"},"cacheTtlMs":{"type":"number"}},"required":["enabled","model","promptVersion","debounceMs","minPrefixCharacters","requestTimeoutMs","maxOutputCharacters","cacheEntries","cacheTtlMs"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/composer-completion/src/index.ts","line":150,"column":3},
+      sourceLocation: {"file":"packages/composer-completion/src/index.ts","line":152,"column":3},
     },
   },
 }, z)
